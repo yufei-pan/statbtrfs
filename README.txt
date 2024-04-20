@@ -15,4 +15,7 @@ optional arguments:
 
 
 Install:
-ln -s /<where you put this py file>/statbtrfs.py /usr/local/bin/statbtrfs
+sudo pip install prettytable
+sudo chmod +x /<where you put this py file>/statbtrfs.py
+sudo ln -s /<where you put this py file>/statbtrfs.py /usr/local/bin/statbtrfs
+sudo statbtrfs -h
