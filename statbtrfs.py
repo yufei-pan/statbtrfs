@@ -7,6 +7,7 @@ import time
 import os
 import sys
 import threading
+import fnmatch
 
 # ANSI color codes for coloring output
 RED = '\033[91m'
@@ -21,7 +22,7 @@ def execute_command(cmd, timeout=120,wait=True):
         columns = 80
     def subprocess_execution():
         nonlocal stdOut, stderr, returncode, process, process_killed
-        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc: 
             process = proc
             while not process_killed:
                 line = process.stdout.readline()
@@ -61,7 +62,7 @@ def execute_command(cmd, timeout=120,wait=True):
             process_killed = True
             process.kill()
             execution_thread.join(1)  # To ensure the thread is cleaned up
-
+            
         returnDic = {'stdout': b''.join(stdOut), 'stderr': stderr, 'returncode': 1}
         returnDic['stdout'] = (returnDic['stdout'] or b'') + b'\nTimeout'
         returnDic['stderr'] = (returnDic['stderr'] or b'') + b'\nTimeout'
@@ -71,11 +72,18 @@ def execute_command(cmd, timeout=120,wait=True):
     return returnDic
 
 
-def find_btrfs_mounts():
+def find_btrfs_mounts(filters):
     mounts = execute_command(["mount", "-t", "btrfs"])['stdout'].decode('utf-8').strip()
+    btrfs_mounts = set()
     if mounts:
-        return [line.split()[2] for line in mounts.split("\n")]
-    return []
+        if filters:
+            filters = [f'*{filter}*' for filter in filters]
+            mount_list = [line.split()[2] for line in mounts.split("\n")]
+            for filter in filters:
+                btrfs_mounts.update(fnmatch.filter(mount_list,filter))
+        else:
+            btrfs_mounts.update([line.split()[2] for line in mounts.split("\n")])
+    return btrfs_mounts
 
 def parse_show_info(info):
     fs_used = None
@@ -158,25 +166,32 @@ def main():
     parser = argparse.ArgumentParser(description="Check Btrfs filesystem status.")
     parser.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
     parser.add_argument("-i", "--interval", help="Interval for status check in seconds", default=2, type=int)
-    parser.add_argument("-m", "--max_scrub_count", help="Maximum number of scrubs to issue at the same time", default=4, type=int)
+    parser.add_argument("-m", "--max_scrub_count", help="Maximum number of scrubs to issue at the same time", default=32, type=int)
     parser.add_argument("--scrub_command_lockout", help="Lockout for scrub command. Used to block two commands sent quickly.", default=10, type=int)
-    parser.add_argument('-V', '--version', action='version', version="%(prog)s 0.14 stat btrfs by pan@zopyr.us")
+    parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs moutns. Default="*"')
+    parser.add_argument('-V', '--version', action='version', version="%(prog)s 0.16 stat btrfs by pan@zopyr.us")
     args = parser.parse_args()
 
-    btrfs_mounts = set(find_btrfs_mounts())
+    btrfs_mounts = set(find_btrfs_mounts(args.pattern))
 
     # If the scrub flag is enabled, issue the scrub command to all mounts
     if args.scrub:
+        if args.max_scrub_count < 1:
+            scrub_count = os.cpu_count()
+        else:
+            scrub_count = args.max_scrub_count
+        if scrub_count > len(btrfs_mounts):
+            scrub_count = len(btrfs_mounts)
         scrubber = issue_scrub_command(btrfs_mounts)
-        for i in range(args.max_scrub_count):
+        for i in range(scrub_count):
             scrubed_mounts = next(scrubber)
         print(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
         scrub_start_time = time.time()
         #print(f'{GREEN}Scrub all issued!{RESET}')
         time.sleep(args.interval)
 
-
-    while True:
+    
+    while True: 
         table = PrettyTable()
 
         table.field_names = ["Mount", "Path", "FS Used", "w_err", "r_err", "bit_rot", "gen_err",
@@ -188,7 +203,7 @@ def main():
 
         for mount in btrfs_mounts:
             mount_dir_name = mount.split("/")[-1]
-
+            
             filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])['stdout'].decode('utf-8').strip()
             uuid, fs_used, device_path = parse_show_info(filesystem_show)
 
@@ -227,7 +242,7 @@ def main():
         scrub_status_idx = table.field_names.index("scrub_status")
         running_scrubs = [row[scrub_status_idx] == "running" for row in table._rows]
         # issue scrub command to next mount if there are less than max_scrub_count scrubs running
-        if sum(running_scrubs) < args.max_scrub_count and time.time() - scrub_start_time > args.scrub_command_lockout and len(scrubed_mounts) < len(btrfs_mounts):
+        if sum(running_scrubs) < scrub_count and time.time() - scrub_start_time > args.scrub_command_lockout and len(scrubed_mounts) < len(btrfs_mounts):
             scrubed_mounts = next(scrubber)
             # print(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
             print(f"{GREEN}Scrubed issued to {scrubed_mounts}.{RESET}")
