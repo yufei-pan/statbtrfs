@@ -170,6 +170,8 @@ def main():
 
         for mount in btrfs_mounts:
             mount_dir_name = mount.split("/")[-1]
+            if not mount_dir_name:
+                mount_dir_name = "/"
             
             filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])
             #filesystem_show = multiCMD.run_command(["btrfs", "filesystem", "show", mount],quiet=True)
