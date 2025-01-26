@@ -1,95 +1,54 @@
 #!/usr/bin/env python3
-
-import subprocess
 from prettytable import PrettyTable
 import argparse
 import time
 import os
 import sys
-import threading
 import fnmatch
+import multiCMD
 
-# ANSI color codes for coloring output
-RED = '\033[91m'
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-RESET = '\033[0m'
+version='0.20'
 
-def execute_command(cmd, timeout=120,wait=True):
-    try:
-        columns, _ = os.get_terminal_size()
-    except :
-        columns = 80
-    def subprocess_execution():
-        nonlocal stdOut, stderr, returncode, process, process_killed
-        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc: 
-            process = proc
-            while not process_killed:
-                line = process.stdout.readline()
-                if not line: break
-                stdOut.append(line)
-                # if wait:
-                #     ctrLine = '\r' + line.decode('utf-8').strip()
-                #     sys.stdout.write(ctrLine.ljust(columns)[:columns])
-                #     sys.stdout.flush()
-            if not process_killed:
-                # if wait:
-                #     sys.stdout.write('\r'+' '*(columns-1))
-                pass
-            else:
-                process.terminate()
-                process.kill()
-                returncode = 1
-                #raise Exception('Process killed')
-            _, stderr = process.communicate()
-            returncode = process.returncode
+# Colors
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
 
-    stdOut, stderr, returncode, process, startTime = [], None, None, None, time.perf_counter()
-    process_killed = False
-    execution_thread = threading.Thread(target=subprocess_execution)
-    execution_thread.start()
-    if wait:
-        execution_thread.join(timeout)
-    elapseTime = time.perf_counter() - startTime
+USE_SUDO = True
+if os.geteuid() == 0:
+    USE_SUDO = False
 
-    if not wait:
-        returnDic = {'stdout': b'Not waiting', 'stderr': stderr, 'returncode': returncode}
-    elif execution_thread.is_alive():
-        process.terminate()
-        process_killed = True
-        execution_thread.join(1)  # Give the process some time to terminate gracefully
-        if execution_thread.is_alive():
-            process_killed = True
-            process.kill()
-            execution_thread.join(1)  # To ensure the thread is cleaned up
-            
-        returnDic = {'stdout': b''.join(stdOut), 'stderr': stderr, 'returncode': 1}
-        returnDic['stdout'] = (returnDic['stdout'] or b'') + b'\nTimeout'
-        returnDic['stderr'] = (returnDic['stderr'] or b'') + b'\nTimeout'
-    else:
-        returnDic = {'stdout': b''.join(stdOut), 'stderr': stderr, 'returncode': returncode}
-    returnDic['elapsedTime'] = elapseTime
-    return returnDic
+if USE_SUDO:
+    #check if sudo is available
+    if multiCMD.run_command(['which','sudo'],quiet=True,return_code_only=True):
+        print(f"{RED}sudo is required to run this script.{RESET}")
+        sys.exit(1)
 
+def execute_command(command,wait=True):
+    if USE_SUDO:
+        command = ['sudo'] + command
+    return multiCMD.run_command(command,quiet=True,wait_for_return=wait)
 
 def find_btrfs_mounts(filters):
-    mounts = execute_command(["mount", "-t", "btrfs"])['stdout'].decode('utf-8').strip()
+    mounts = execute_command(["mount", "-t", "btrfs"])
+    #mounts = multiCMD.run_command(["mount", "-t", "btrfs"],quiet=True)
     btrfs_mounts = set()
     if mounts:
         if filters:
             filters = [f'*{filter}*' for filter in filters]
-            mount_list = [line.split()[2] for line in mounts.split("\n")]
+            mount_list = [line.split()[2] for line in mounts]
             for filter in filters:
                 btrfs_mounts.update(fnmatch.filter(mount_list,filter))
         else:
-            btrfs_mounts.update([line.split()[2] for line in mounts.split("\n")])
+            btrfs_mounts.update([line.split()[2] for line in mounts])
     return btrfs_mounts
 
 def parse_show_info(info):
     fs_used = None
     device_path = None
     uuid = None
-    for line in info.split("\n"):
+    for line in info:
         if "uuid:" in line:
             uuid = line.split("uuid:")[1].split()[0].strip()
         if "Total devices" in line:
@@ -103,7 +62,7 @@ def parse_show_info(info):
 
 def parse_device_stats(stats):
     err_dict = {}
-    for line in stats.split("\n"):
+    for line in stats:
         key, val = line.split()
         err_dict[key.split(".")[-1]] = val
     return err_dict
@@ -118,34 +77,41 @@ def color_error_count(error_count):
 
 def parse_scrub_status(output):
     scrub_data = {}
-    lines = output.strip().split("\n")
-    if "no stats available" in output:
-        scrub_data = {
-            "scrub_status": "Never",
-            "scrub_time": "N/A",
-            "scrub_rate": "N/A",
-            "scrubbed_data": "N/A",
-            "error_summary": "N/A"
-        }
-    else:
-        for line in lines:
-            if "Status:" in line:
-                scrub_data["scrub_status"] = line.split(":")[1].strip()
-            elif "Scrub started:" in line:
-                scrub_data["scrub_time"] = line.split(":")[1].strip()
-            elif "Rate:" in line:
-                scrub_data["scrub_rate"] = line.split(":")[1].strip()
-            elif "Total to scrub:" in line and scrub_data.get("scrub_status") != "running":
-                scrub_data["scrubbed_data"] = line.split(":")[1].strip()
-            elif "Bytes scrubbed:" in line and scrub_data.get("scrub_status") == "running":
-                scrub_data["scrubbed_data"] = line.split(":")[1].strip()
-            elif "Error summary:" in line:
-                err_idx = lines.index(line)
-                error_text = "\n".join(lines[err_idx:])
-                if "no errors found" in error_text.lower():
-                    scrub_data["error_summary"] = f"{GREEN}OK{RESET}"  # Green-colored OK
-                else:
-                    scrub_data["error_summary"] = F"{RED}{error_text}{RESET}"
+    lines = output
+    # if "no stats available" in output:
+    #     scrub_data = {
+    #         "scrub_status": "Never",
+    #         "scrub_time": "N/A",
+    #         "scrub_rate": "N/A",
+    #         "scrubbed_data": "N/A",
+    #         "error_summary": "N/A"
+    #     }
+    # else:
+    scrub_data = {
+        "scrub_status": "Never",
+        "scrub_time": "N/A",
+        "scrub_rate": "N/A",
+        "scrubbed_data": "N/A",
+        "error_summary": "N/A"
+    }
+    for line in lines:
+        if "Status:" in line:
+            scrub_data["scrub_status"] = line.split(":")[1].strip()
+        elif "Scrub started:" in line:
+            scrub_data["scrub_time"] = line.split(":")[1].strip()
+        elif "Rate:" in line:
+            scrub_data["scrub_rate"] = line.split(":")[1].strip()
+        elif "Total to scrub:" in line and scrub_data.get("scrub_status") != "running":
+            scrub_data["scrubbed_data"] = line.split(":")[1].strip()
+        elif "Bytes scrubbed:" in line and scrub_data.get("scrub_status") == "running":
+            scrub_data["scrubbed_data"] = line.split(":")[1].strip()
+        elif "Error summary:" in line:
+            err_idx = lines.index(line)
+            error_text = "\n".join(lines[err_idx:])
+            if "no errors found" in error_text.lower():
+                scrub_data["error_summary"] = f"{GREEN}OK{RESET}"  # Green-colored OK
+            else:
+                scrub_data["error_summary"] = F"{RED}{error_text}{RESET}"
 
     return scrub_data
 
@@ -156,7 +122,8 @@ def issue_scrub_command(mounts):
     scrubed_mounts = []
     for mount in mounts:
         print(f"{YELLOW}Issuing scrub on {mount}{RESET}")
-        execute_command(['bash','-c',f"btrfs scrub start {mount}"],wait=False)
+        execute_command(['btrfs','scrub','start',mount],wait=False)
+        #multiCMD.run_command(['btrfs','scrub','start',mount],quiet=True)
         scrubed_mounts.append(mount)
         yield scrubed_mounts
     return scrubed_mounts
@@ -169,7 +136,7 @@ def main():
     parser.add_argument("-m", "--max_scrub_count", help="Maximum number of scrubs to issue at the same time", default=32, type=int)
     parser.add_argument("--scrub_command_lockout", help="Lockout for scrub command. Used to block two commands sent quickly.", default=10, type=int)
     parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs moutns. Default="*"')
-    parser.add_argument('-V', '--version', action='version', version="%(prog)s 0.16 stat btrfs by pan@zopyr.us")
+    parser.add_argument('-V', '--version', action='version', version=f"%(prog)s {version} stat btrfs by pan@zopyr.us")
     args = parser.parse_args()
 
     btrfs_mounts = set(find_btrfs_mounts(args.pattern))
@@ -204,17 +171,20 @@ def main():
         for mount in btrfs_mounts:
             mount_dir_name = mount.split("/")[-1]
             
-            filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])['stdout'].decode('utf-8').strip()
+            filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])
+            #filesystem_show = multiCMD.run_command(["btrfs", "filesystem", "show", mount],quiet=True)
             uuid, fs_used, device_path = parse_show_info(filesystem_show)
 
             if uuid is None or fs_used is None or device_path is None:
                 print(f"{RED}Could not fetch complete info for {mount}. Skipping...{RESET}")
                 continue
 
-            device_stats = execute_command(["btrfs", "device", "stats", mount])['stdout'].decode('utf-8').strip()
+            device_stats = execute_command(["btrfs", "device", "stats", mount])
+            #device_stats = multiCMD.run_command(["btrfs", "device", "stats", mount],quiet=True)
             err_dict = parse_device_stats(device_stats)
 
-            scrub_output = execute_command(["btrfs", "scrub", "status", device_path])['stdout'].decode('utf-8').strip()
+            scrub_output = execute_command(["btrfs", "scrub", "status", device_path])
+            #scrub_output = multiCMD.run_command(["btrfs", "scrub", "status", device_path],quiet=True)
             scrub_data = parse_scrub_status(scrub_output)
 
             table.add_row([
