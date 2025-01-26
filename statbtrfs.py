@@ -7,7 +7,7 @@ import sys
 import fnmatch
 import multiCMD
 
-version='0.20'
+version='0.21'
 
 # Colors
 RED = "\033[91m"
@@ -29,6 +29,11 @@ def execute_command(command,wait=True):
     if USE_SUDO:
         command = ['sudo'] + command
     return multiCMD.run_command(command,quiet=True,wait_for_return=wait)
+
+def execute_commands(commands,wait=True):
+    if USE_SUDO:
+        commands = [['sudo']+command for command in commands]
+    return multiCMD.run_commands(commands,quiet=True,wait_for_return=wait,max_threads=0)
 
 def find_btrfs_mounts(filters):
     mounts = execute_command(["mount", "-t", "btrfs"])
@@ -173,7 +178,15 @@ def main():
             if not mount_dir_name:
                 mount_dir_name = "/"
             
-            filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])
+            # filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])
+            # device_stats = execute_command(["btrfs", "device", "stats", mount])
+            # scrub_output = execute_command(["btrfs", "scrub", "status", device_path])
+            filesystem_show, device_stats, scrub_output = execute_commands([
+                ["btrfs", "filesystem", "show", mount],
+                ["btrfs", "device", "stats", mount],
+                ["btrfs", "scrub", "status", mount]
+            ])
+
             #filesystem_show = multiCMD.run_command(["btrfs", "filesystem", "show", mount],quiet=True)
             uuid, fs_used, device_path = parse_show_info(filesystem_show)
 
@@ -181,11 +194,9 @@ def main():
                 print(f"{RED}Could not fetch complete info for {mount}. Skipping...{RESET}")
                 continue
 
-            device_stats = execute_command(["btrfs", "device", "stats", mount])
             #device_stats = multiCMD.run_command(["btrfs", "device", "stats", mount],quiet=True)
             err_dict = parse_device_stats(device_stats)
 
-            scrub_output = execute_command(["btrfs", "scrub", "status", device_path])
             #scrub_output = multiCMD.run_command(["btrfs", "scrub", "status", device_path],quiet=True)
             scrub_data = parse_scrub_status(scrub_output)
 
