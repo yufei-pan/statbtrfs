@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.6"
+# dependencies = [
+#     "argparse",
+#     "prettytable",
+#     "multiCMD",
+# ]
+# ///
 from prettytable import PrettyTable
 import argparse
 import time
