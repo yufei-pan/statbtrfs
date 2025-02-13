@@ -16,6 +16,7 @@ import fnmatch
 import multiCMD
 
 version='0.21'
+__version__ = version
 
 # Colors
 RED = "\033[91m"
