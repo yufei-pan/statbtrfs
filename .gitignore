@@ -3,3 +3,4 @@ dist
 *.egg-info
 .venv
 __pycache__
+multiCMD.py
