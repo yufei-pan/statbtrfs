@@ -164,7 +164,7 @@ def main():
         if scrub_count > len(btrfs_mounts):
             scrub_count = len(btrfs_mounts)
         scrubber = issue_scrub_command(btrfs_mounts)
-        for i in range(scrub_count):
+        for _ in range(scrub_count):
             scrubed_mounts = next(scrubber)
         print(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
         scrub_start_time = time.time()
