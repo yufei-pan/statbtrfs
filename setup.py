@@ -17,8 +17,7 @@ setup(
         ],
     },
     install_requires=[
-        'prettytable',
-		'multiCMD',
+		'multiCMD>=1.40',
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
