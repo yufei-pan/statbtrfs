@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 import argparse
 import time
 import os
@@ -79,7 +80,7 @@ d\o=S<"qi&MSB\aIoJ)[VI+gX>j<_E&IGf>M"*rR"7'=&q+)]&B//Ad++fSb)R.<TqA@'#3=EQ93g@!H
 )!!/uMU4iUJ8mOKNZ,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.26'
+version='0.27'
 __version__ = version
 
 # Colors
@@ -215,6 +216,11 @@ def main():
     parser.add_argument("--scrub_command_lockout", help="Lockout for scrub command. Used to block two commands sent quickly.", default=10, type=int)
     parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs moutns. Default="*"')
     parser.add_argument('-V', '--version', action='version', version=f"%(prog)s {version} stat btrfs by pan@zopyr.us")
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser,always_complete_options='long')
+    except ImportError:
+        pass
     args = parser.parse_args()
 
     btrfs_mounts = set(find_btrfs_mounts(args.pattern))
