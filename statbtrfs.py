@@ -5,6 +5,7 @@ import time
 import os
 import sys
 import fnmatch
+from datetime import datetime
 try:
 	import multiCMD  # type: ignore
 	assert float(multiCMD.version) >= 1.47
@@ -92,7 +93,7 @@ J%qnMk3G%Ki=s>n[1@,^@>j\8FEhN0`om\)D0qE:R`HqPJ4V2sGJQF,mfou/XJaY?rc[UV'\!tti]K/e
 3o1Z^c;DqS!6qW$2SYp!!/0?QbEJ#:7ZhqZ,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.28'
+version='0.29'
 __version__ = version
 
 # Colors
@@ -187,15 +188,15 @@ def parse_scrub_status(output):
     }
     for line in lines:
         if "Status:" in line:
-            scrub_data["scrub_status"] = line.split(":")[1].strip()
+            scrub_data["scrub_status"] = line.split(":", 1)[1].strip()
         elif "Scrub started:" in line:
-            scrub_data["scrub_time"] = line.split(":")[1].strip()
+            scrub_data["scrub_time"] = line.split(":", 1)[1].strip()
         elif "Rate:" in line:
-            scrub_data["scrub_rate"] = line.split(":")[1].strip()
+            scrub_data["scrub_rate"] = line.split(":", 1)[1].strip()
         elif "Total to scrub:" in line and scrub_data.get("scrub_status") != "running":
-            scrub_data["scrubbed_data"] = line.split(":")[1].strip()
+            scrub_data["scrubbed_data"] = line.split(":", 1)[1].strip()
         elif "Bytes scrubbed:" in line and scrub_data.get("scrub_status") == "running":
-            scrub_data["scrubbed_data"] = line.split(":")[1].strip()
+            scrub_data["scrubbed_data"] = line.split(":", 1)[1].strip()
         elif "Error summary:" in line:
             err_idx = lines.index(line)
             error_text = "\n".join(lines[err_idx:])
@@ -205,6 +206,46 @@ def parse_scrub_status(output):
                 scrub_data["error_summary"] = F"{RED}{error_text}{RESET}"
 
     return scrub_data
+
+def parse_scrub_time_to_epoch(scrub_time):
+    # btrfs commonly prints values like: "Thu May  2 09:56:55 2024"
+    time_formats = [
+        "%a %b %d %H:%M:%S %Y",
+        "%a %b %d %H:%M:%S %Y %Z",
+        "%Y-%m-%d %H:%M:%S"
+    ]
+    for time_format in time_formats:
+        try:
+            return datetime.strptime(scrub_time, time_format).timestamp()
+        except ValueError:
+            continue
+    return None
+
+def filter_recently_scrubbed_mounts(btrfs_mounts, exclude_recent_days):
+    if exclude_recent_days <= 0:
+        return btrfs_mounts, []
+
+    now = time.time()
+    cutoff_seconds = exclude_recent_days * 24 * 3600
+    filtered_mounts = set()
+    skipped_mounts = []
+
+    for mount in btrfs_mounts:
+        scrub_output = execute_command(["btrfs", "scrub", "status", mount])
+        scrub_data = parse_scrub_status(scrub_output or [])
+        scrub_status = scrub_data.get("scrub_status", "").strip().lower()
+        scrub_time_epoch = parse_scrub_time_to_epoch(scrub_data["scrub_time"])
+
+        if scrub_status != "finished" or scrub_time_epoch is None:
+            filtered_mounts.add(mount)
+            continue
+
+        if now - scrub_time_epoch < cutoff_seconds:
+            skipped_mounts.append(mount)
+        else:
+            filtered_mounts.add(mount)
+
+    return filtered_mounts, skipped_mounts
 
 def issue_scrub_command(mounts):
     # print(f"{YELLOW}Issuing scrub on {mount}{RESET}")
@@ -225,6 +266,13 @@ def main():
     parser.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
     parser.add_argument("-i", "--interval", help="Interval for status check in seconds", default=2, type=int)
     parser.add_argument("-m", "--max_scrub_count", help="Maximum number of scrubs to issue at the same time", default=32, type=int)
+    parser.add_argument(
+        "-d",
+        "--exclude-recent-scrubbed-days",
+        help="Exclude mounts scrubbed within this many days",
+        default=0,
+        type=int
+    )
     parser.add_argument("--scrub_command_lockout", help="Lockout for scrub command. Used to block two commands sent quickly.", default=10, type=int)
     parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs moutns. Default="*"')
     parser.add_argument('-V', '--version', action='version', version=f"%(prog)s {version} stat btrfs by pan@zopyr.us")
@@ -236,6 +284,15 @@ def main():
     args = parser.parse_args()
 
     btrfs_mounts = set(find_btrfs_mounts(args.pattern))
+    btrfs_mounts, skipped_mounts = filter_recently_scrubbed_mounts(
+        btrfs_mounts,
+        args.exclude_recent_scrubbed_days
+    )
+    if skipped_mounts:
+        print(
+            f"{YELLOW}Skipping mounts scrubbed within the last "
+            f"{args.exclude_recent_scrubbed_days}d: {', '.join(sorted(skipped_mounts))}{RESET}"
+        )
 
     # If the scrub flag is enabled, issue the scrub command to all mounts
     if args.scrub:
