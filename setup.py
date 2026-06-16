@@ -17,7 +17,7 @@ setup(
         ],
     },
     install_requires=[
-		'multiCMD>=1.40',
+		'multiCMD>=1.47',
         'argparse',
     ],
     extras_require={

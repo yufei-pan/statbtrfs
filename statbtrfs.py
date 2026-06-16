@@ -8,8 +8,8 @@ import fnmatch
 from datetime import datetime
 try:
 	import multiCMD  # type: ignore
-	assert float(multiCMD.version) >= 1.47
-except (ImportError, AssertionError):
+	assert tuple(int(part) for part in multiCMD.version.split('.')[:2]) >= (1, 47)
+except (ImportError, AssertionError, ValueError):
 	import sys,types,base64,lzma   # noqa: E401
 	multiCMD = types.ModuleType("multiCMD")
 	sys.modules["multiCMD"] = multiCMD
@@ -93,7 +93,7 @@ J%qnMk3G%Ki=s>n[1@,^@>j\8FEhN0`om\)D0qE:R`HqPJ4V2sGJQF,mfou/XJaY?rc[UV'\!tti]K/e
 3o1Z^c;DqS!6qW$2SYp!!/0?QbEJ#:7ZhqZ,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.29'
+version='0.30'
 __version__ = version
 
 # Colors
@@ -138,7 +138,7 @@ def find_btrfs_mounts(filters):
 
 def parse_show_info(info):
     fs_used = None
-    device_path = None
+    device_paths = []
     uuid = None
     for line in info:
         if "uuid:" in line:
@@ -146,7 +146,8 @@ def parse_show_info(info):
         if "Total devices" in line:
             fs_used = line.split("FS bytes used")[1].strip()
         if "path" in line:
-            device_path = line.split("path")[1].strip()
+            device_paths.append(line.split("path")[1].strip())
+    device_path = ", ".join(device_paths) if device_paths else None
     if fs_used is None or device_path is None or uuid is None:
         print(f"{RED}Could not parse btrfs show info.{RESET}")
         print(f"Output from btrfs filesystem show was:\n{info}")
@@ -155,7 +156,10 @@ def parse_show_info(info):
 def parse_device_stats(stats):
     err_dict = {}
     for line in stats:
-        key, val = line.split()
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        key, val = parts
         err_dict[key.split(".")[-1]] = val
     return err_dict
 
@@ -274,7 +278,7 @@ def main():
         type=int
     )
     parser.add_argument("--scrub_command_lockout", help="Lockout for scrub command. Used to block two commands sent quickly.", default=10, type=int)
-    parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs moutns. Default="*"')
+    parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs mounts. Default="*"')
     parser.add_argument('-V', '--version', action='version', version=f"%(prog)s {version} stat btrfs by pan@zopyr.us")
     try:
         import argcomplete
@@ -293,6 +297,10 @@ def main():
             f"{YELLOW}Skipping mounts scrubbed within the last "
             f"{args.exclude_recent_scrubbed_days}d: {', '.join(sorted(skipped_mounts))}{RESET}"
         )
+
+    if not btrfs_mounts:
+        print(f"{RED}No Btrfs mounts found.{RESET}")
+        return
 
     # If the scrub flag is enabled, issue the scrub command to all mounts
     if args.scrub:
@@ -346,10 +354,10 @@ def main():
                 mount_dir_name,
                 device_path,
                 fs_used,
-                color_error_count(err_dict['write_io_errs']),
-                color_error_count(err_dict['read_io_errs']),
-                color_error_count(err_dict['corruption_errs']),
-                color_error_count(err_dict['generation_errs']),
+                color_error_count(err_dict.get('write_io_errs', 0)),
+                color_error_count(err_dict.get('read_io_errs', 0)),
+                color_error_count(err_dict.get('corruption_errs', 0)),
+                color_error_count(err_dict.get('generation_errs', 0)),
                 scrub_data["scrub_status"],
                 scrub_data["scrub_time"],
                 scrub_data["scrub_rate"],
