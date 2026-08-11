@@ -33,17 +33,21 @@ def test_main_scrub_first_wave_respects_max_count(monkeypatch, capsys):
         "/dev/sdc1 on /data type btrfs (rw)",
     ]
 
-    state = {"polls": 0}
+    # lockout=2 + interval=1 → ≥1 status poll with room under max before lockout elapses
+    lockout = 2
+    interval = 1
     clock = {"now": 1_000_000.0}
-    started_at_first_sleep = []
+    mount_status = {}  # only started mounts appear; unstarted → Never
+    started = []
+    start_clocks = []
+    sleep_snapshots = []  # (now, len(started)) taken at each sleep entry
+    state = {"status_in_round": 0, "round": 0}
 
     def fake_time():
         return clock["now"]
 
     def fake_sleep(seconds):
-        # First sleep is right after the initial wave (before any later next(scrubber)).
-        if not started_at_first_sleep:
-            started_at_first_sleep.append(len(started))
+        sleep_snapshots.append((clock["now"], len(started)))
         clock["now"] += seconds
 
     def lookup(command, wait=True):
@@ -57,18 +61,33 @@ def test_main_scrub_first_wave_respects_max_count(monkeypatch, capsys):
         if cmd[:3] == ("btrfs", "device", "stats"):
             return list(STATS_ZERO)
         if cmd[:3] == ("btrfs", "scrub", "status"):
-            state["polls"] += 1
-            # First table poll(s): still running so loop continues; then finished
-            if state["polls"] <= len(mounts):
-                return list(SCRUB_RUNNING)
-            return list(SCRUB_FINISHED_OK)
-        return []
+            mount = cmd[3]
+            # Start of each table round (one status call per mount)
+            if state["status_in_round"] == 0:
+                state["round"] += 1
+                if state["round"] == 1 and started:
+                    # Free a slot under -m while one scrub still running (lockout must still block)
+                    mount_status[started[0]] = "finished"
+                if len(started) == 3:
+                    # After wave-2 start, finish everyone so the exit path can fire
+                    for m in list(mount_status):
+                        mount_status[m] = "finished"
+            state["status_in_round"] = (state["status_in_round"] + 1) % len(mounts)
 
-    started = []
+            status = mount_status.get(mount)
+            if status == "running":
+                return list(SCRUB_RUNNING)
+            if status == "finished":
+                return list(SCRUB_FINISHED_OK)
+            return list(SCRUB_NEVER)
+        return []
 
     def execute_command(command, wait=True):
         if tuple(command)[:3] == ("btrfs", "scrub", "start"):
-            started.append(command[3])
+            mount = command[3]
+            started.append(mount)
+            start_clocks.append(clock["now"])
+            mount_status[mount] = "running"
         return lookup(command, wait=wait)
 
     def execute_commands(commands, wait=True):
@@ -82,7 +101,16 @@ def test_main_scrub_first_wave_respects_max_count(monkeypatch, capsys):
     monkeypatch.setattr(
         statbtrfs.sys,
         "argv",
-        ["statbtrfs", "-s", "-m", "2", "--scrub_command_lockout", "1", "-i", "1"],
+        [
+            "statbtrfs",
+            "-s",
+            "-m",
+            "2",
+            "--scrub_command_lockout",
+            str(lockout),
+            "-i",
+            str(interval),
+        ],
     )
 
     # Force deterministic iteration order for the set of mounts by patching find_btrfs_mounts
@@ -98,12 +126,26 @@ def test_main_scrub_first_wave_respects_max_count(monkeypatch, capsys):
     statbtrfs.main()
     out = capsys.readouterr().out
     assert "All Scrubs finished." in out
-    # Concurrency cap: only 2 starts before first sleep (lockout not yet used for wave 2)
-    assert started_at_first_sleep == [2]
-    # First wave size 2; later wave should start the remaining mount
-    assert len(started) == 3
+
+    wave_start = start_clocks[0]
+    assert start_clocks[0] == start_clocks[1]
     assert started[:2] == sorted(mounts)[:2]
     assert started[2] == sorted(mounts)[2]
+
+    # First sleep is immediately after wave 1 — concurrency cap holds
+    assert sleep_snapshots[0] == (wave_start, 2)
+
+    # Mid-loop: room under max (one finished, one running) but lockout not elapsed → still 2 starts
+    pre_third_after_poll = [
+        (now, n) for now, n in sleep_snapshots[1:] if n == 2
+    ]
+    assert pre_third_after_poll, "expected ≥1 poll sleep with room under -m before wave 2"
+    assert all(n == 2 for _, n in pre_third_after_poll)
+    assert all(now - wave_start <= lockout for now, _ in pre_third_after_poll)
+
+    # Third start only after lockout gate (not merely "eventually 3")
+    assert len(started) == 3
+    assert start_clocks[2] - wave_start > lockout
 
 
 def test_main_scrub_exclude_recent_never_starts_skipped(monkeypatch, capsys):
