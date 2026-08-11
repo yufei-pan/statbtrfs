@@ -16,3 +16,9 @@ optional arguments:
 
 Install:
 sudo pip install statbtrfs
+
+Development:
+  pip install -r requirements-dev.txt
+  pytest                                 # unit tests (offline)
+  pytest --cov=statbtrfs --cov-fail-under=85
+  pytest -m live                         # optional status-only smoke on a btrfs host

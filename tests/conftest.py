@@ -23,6 +23,15 @@ def skip_unless_live_btrfs():
         pytest.skip("btrfs binary required")
     import statbtrfs
 
-    mounts = statbtrfs.find_btrfs_mounts([])
+    try:
+        mounts = statbtrfs.find_btrfs_mounts([])
+    except SystemExit:
+        pytest.skip("sudo/root required for live btrfs queries")
     if not mounts:
         pytest.skip("no btrfs mounts")
+
+    sample = next(iter(mounts))
+    try:
+        statbtrfs.execute_command(["btrfs", "scrub", "status", sample])
+    except SystemExit:
+        pytest.skip("sudo/root required for live btrfs queries")
