@@ -102,22 +102,27 @@ GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
-USE_SUDO = True
-if os.geteuid() == 0:
-    USE_SUDO = False
+USE_SUDO = os.geteuid() != 0
+_SUDO_CHECKED = False
 
-if USE_SUDO:
-    #check if sudo is available
-    if multiCMD.run_command(['which','sudo'],quiet=True,return_code_only=True):
+def ensure_privileges():
+    """Fail fast if non-root and sudo is unavailable. Safe to call repeatedly."""
+    global _SUDO_CHECKED
+    if not USE_SUDO or _SUDO_CHECKED:
+        return
+    _SUDO_CHECKED = True
+    if multiCMD.run_command(['which', 'sudo'], quiet=True, return_code_only=True):
         print(f"{RED}sudo is required to run this script.{RESET}")
         sys.exit(1)
 
 def execute_command(command,wait=True):
+    ensure_privileges()
     if USE_SUDO:
         command = ['sudo'] + command
     return multiCMD.run_command(command,quiet=True,wait_for_return=wait)
 
 def execute_commands(commands,wait=True):
+    ensure_privileges()
     if USE_SUDO:
         commands = [['sudo']+command for command in commands]
     return multiCMD.run_commands(commands,quiet=True,wait_for_return=wait,max_threads=0)
