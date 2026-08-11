@@ -1,0 +1,56 @@
+from datetime import datetime
+
+import statbtrfs
+from fakes import (
+    SCRUB_FINISHED_ERRORS,
+    SCRUB_FINISHED_OK,
+    SCRUB_NEVER,
+    SCRUB_RUNNING,
+    SCRUB_TIME_BASIC,
+    SCRUB_TIME_ISO,
+)
+
+
+def test_parse_scrub_never_defaults():
+    data = statbtrfs.parse_scrub_status(SCRUB_NEVER)
+    assert data["scrub_status"] == "Never"
+    assert data["scrub_time"] == "N/A"
+    assert data["scrub_rate"] == "N/A"
+    assert data["scrubbed_data"] == "N/A"
+    assert data["error_summary"] == "N/A"
+
+
+def test_parse_scrub_empty_defaults():
+    data = statbtrfs.parse_scrub_status([])
+    assert data["scrub_status"] == "Never"
+
+
+def test_parse_scrub_finished_ok_uses_total_to_scrub():
+    data = statbtrfs.parse_scrub_status(SCRUB_FINISHED_OK)
+    assert data["scrub_status"] == "finished"
+    assert data["scrub_time"] == "Thu May  2 09:56:55 2024"
+    assert data["scrub_rate"] == "17.00MiB/s"
+    assert data["scrubbed_data"] == "10.00GiB"
+    assert "OK" in data["error_summary"]
+    assert statbtrfs.GREEN in data["error_summary"]
+
+
+def test_parse_scrub_running_uses_bytes_scrubbed():
+    data = statbtrfs.parse_scrub_status(SCRUB_RUNNING)
+    assert data["scrub_status"] == "running"
+    assert data["scrubbed_data"] == "40.00GiB"
+
+
+def test_parse_scrub_finished_with_errors_is_red():
+    data = statbtrfs.parse_scrub_status(SCRUB_FINISHED_ERRORS)
+    assert "csum=3" in data["error_summary"]
+    assert statbtrfs.RED in data["error_summary"]
+
+
+def test_parse_scrub_time_formats():
+    epoch = statbtrfs.parse_scrub_time_to_epoch(SCRUB_TIME_BASIC)
+    assert epoch == datetime.strptime(SCRUB_TIME_BASIC, "%a %b %d %H:%M:%S %Y").timestamp()
+    epoch_iso = statbtrfs.parse_scrub_time_to_epoch(SCRUB_TIME_ISO)
+    assert epoch_iso == datetime.strptime(SCRUB_TIME_ISO, "%Y-%m-%d %H:%M:%S").timestamp()
+    assert statbtrfs.parse_scrub_time_to_epoch("N/A") is None
+    assert statbtrfs.parse_scrub_time_to_epoch("not a time") is None
