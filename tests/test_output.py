@@ -183,3 +183,11 @@ def test_scrub_redraws_in_place_on_a_terminal(monkeypatch, capsys):
 
 def test_scrub_appends_when_not_a_terminal(monkeypatch, capsys):
     assert statbtrfs.CLEAR_SCREEN not in _scrub_run(monkeypatch, capsys, is_tty=False)
+
+
+def test_screen_flush_prints_held_messages_once(capsys):
+    screen = statbtrfs.Screen(redraw=True)
+    screen.event("skipping /mnt/a")
+    screen.flush()
+    screen.flush()
+    assert capsys.readouterr().out == "skipping /mnt/a\n"

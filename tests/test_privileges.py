@@ -75,3 +75,17 @@ def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root):
     monkeypatch.setattr(statbtrfs.multiCMD, "run_command", lambda cmd, **kw: seen.append(cmd) or [])
     statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"])
     assert seen == [["sudo", "btrfs", "scrub", "status", "/mnt/a"]]
+
+
+def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
+    seen = {}
+
+    def fake_run_commands(cmds, **kw):
+        seen["cmds"], seen["kw"] = cmds, kw
+        return [[] for _ in cmds]
+
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_commands", fake_run_commands)
+    statbtrfs.execute_commands([["btrfs", "device", "stats", "/mnt/a"]])
+    assert seen["cmds"] == [["sudo", "btrfs", "device", "stats", "/mnt/a"]]
+    assert seen["kw"]["max_threads"] == statbtrfs.MAX_PARALLEL_COMMANDS

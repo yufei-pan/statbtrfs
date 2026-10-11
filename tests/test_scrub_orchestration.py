@@ -212,3 +212,8 @@ def test_ctrl_c_at_the_prompt_keeps_scrubs_running(monkeypatch):
     fake, code = _interrupted_run(monkeypatch)
     assert fake.cancelled == []
     assert code == statbtrfs.EXIT_INTERRUPTED
+
+
+def test_describe_scrub():
+    assert statbtrfs.describe_scrub(None) == "status unknown"
+    assert statbtrfs.describe_scrub(statbtrfs.parse_scrub_status([])) == "Never"
