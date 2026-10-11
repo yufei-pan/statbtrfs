@@ -6,6 +6,8 @@ import os
 import sys
 import fnmatch
 import re
+import shutil
+import subprocess
 from datetime import datetime
 try:
 	import multiCMD  # type: ignore
@@ -112,30 +114,43 @@ GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
+# Prefix each btrfs command with sudo. Set by acquire_root() for the per-command fallback.
 USE_SUDO = os.geteuid() != 0
-_SUDO_CHECKED = False
+MAX_PARALLEL_COMMANDS = 32
 
-def ensure_privileges():
-    """Fail fast if non-root and sudo is unavailable. Safe to call repeatedly."""
-    global _SUDO_CHECKED
-    if not USE_SUDO or _SUDO_CHECKED:
+def _is_root():
+    return os.geteuid() == 0
+
+def acquire_root(argv):
+    """Make the btrfs commands run as root.
+
+    Non-root: if sudo allows re-running this script, re-exec under sudo once (one prompt, one sudo
+    log entry per run instead of one per command). Otherwise, e.g. a sudoers rule that allows only
+    btrfs, fall back to running each btrfs command through sudo."""
+    global USE_SUDO
+    if _is_root():
+        USE_SUDO = False
         return
-    _SUDO_CHECKED = True
-    if multiCMD.run_command(['which', 'sudo'], quiet=True, return_code_only=True):
-        print(f"{RED}sudo is required to run this script.{RESET}")
+    sudo = shutil.which('sudo')
+    if not sudo:
+        print(f"{RED}statbtrfs needs root: run it as root or install sudo.{RESET}")
         sys.exit(1)
+    command = [sys.executable, os.path.abspath(__file__)] + list(argv)
+    # -l: may the user run this exact command? Without a terminal, never wait for a password.
+    check = [sudo, '-l', '--'] if sys.stdin.isatty() else [sudo, '-n', '-l', '--']
+    if subprocess.call(check + command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+        os.execv(sudo, [sudo, '--'] + command)
+    USE_SUDO = True
 
 def execute_command(command,wait=True):
-    ensure_privileges()
     if USE_SUDO:
         command = ['sudo'] + command
     return multiCMD.run_command(command,quiet=True,wait_for_return=wait)
 
 def execute_commands(commands,wait=True):
-    ensure_privileges()
     if USE_SUDO:
         commands = [['sudo']+command for command in commands]
-    return multiCMD.run_commands(commands,quiet=True,wait_for_return=wait,max_threads=0)
+    return multiCMD.run_commands(commands,quiet=True,wait_for_return=wait,max_threads=MAX_PARALLEL_COMMANDS)
 
 PROC_MOUNTS = '/proc/self/mounts'
 _MOUNT_ESCAPE_RX = re.compile(r'\\([0-7]{3})')
@@ -346,8 +361,8 @@ def filter_recently_scrubbed(filesystems, exclude_recent_days):
     kept = []
     skipped = []
 
-    for fs in filesystems:
-        scrub_output = execute_command(["btrfs", "scrub", "status", fs['mounts'][0]])
+    outputs = execute_commands([["btrfs", "scrub", "status", fs['mounts'][0]] for fs in filesystems]) if filesystems else []
+    for fs, scrub_output in zip(filesystems, outputs):
         scrub_data = parse_scrub_status(scrub_output or [])
         scrub_status = scrub_data.get("scrub_status", "").strip().lower()
         scrub_time_epoch = parse_scrub_time_to_epoch(scrub_data["scrub_time"])
@@ -362,6 +377,19 @@ def filter_recently_scrubbed(filesystems, exclude_recent_days):
             kept.append(fs)
 
     return kept, skipped
+
+def poll_filesystems(filesystems):
+    """[(fs, show, stats, scrub_status)] for every filesystem, from one parallel batch of commands."""
+    commands = []
+    for fs in filesystems:
+        mount = fs['mounts'][0]
+        commands += [
+            ["btrfs", "filesystem", "show", mount],
+            ["btrfs", "device", "stats", mount],
+            ["btrfs", "scrub", "status", mount],
+        ]
+    outputs = [output or [] for output in execute_commands(commands)] if commands else []
+    return [(fs, *outputs[3 * i:3 * i + 3]) for i, fs in enumerate(filesystems)]
 
 def issue_scrub_command(mounts):
     # print(f"{YELLOW}Issuing scrub on {mount}{RESET}")
@@ -398,6 +426,7 @@ def main():
     except ImportError:
         pass
     args = parser.parse_args()
+    acquire_root(sys.argv[1:])
 
     filesystems = select_filesystems(discover_filesystems(find_btrfs_mounts(None)), args.pattern)
     filesystems, skipped = filter_recently_scrubbed(filesystems, args.exclude_recent_scrubbed_days)
@@ -433,17 +462,8 @@ def main():
                             "scrub_status", "scrub_time", "scrub_rate", "scrubbed_data", "error_summary"]
         table = []
         running_scrubs = []
-        for fs in filesystems:
+        for fs, filesystem_show, device_stats, scrub_output in poll_filesystems(filesystems):
             mount = fs['mounts'][0]
-            # filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])
-            # device_stats = execute_command(["btrfs", "device", "stats", mount])
-            # scrub_output = execute_command(["btrfs", "scrub", "status", device_path])
-            filesystem_show, device_stats, scrub_output = execute_commands([
-                ["btrfs", "filesystem", "show", mount],
-                ["btrfs", "device", "stats", mount],
-                ["btrfs", "scrub", "status", mount]
-            ])
-            #filesystem_show = multiCMD.run_command(["btrfs", "filesystem", "show", mount],quiet=True)
             uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
             if uuid is None or fs_used is None or device_path is None:
                 print(f"{RED}Could not fetch complete info for {mount}. Skipping...{RESET}")

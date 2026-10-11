@@ -152,6 +152,29 @@ def test_main_scrub_starts_once_per_filesystem(monkeypatch):
     assert starts == ["/", "/mnt/pool"]
 
 
+def test_main_polls_every_filesystem_in_one_batch(monkeypatch):
+    cm = install_command_map(monkeypatch, _subvol_status_map(monkeypatch), statbtrfs)
+    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
+    statbtrfs.main()
+    assert [c[0] for c in cm.calls] == ["cmds", "cmds"]  # discovery, then one status poll
+    discovery, poll = cm.calls[0][1], cm.calls[1][1]
+    assert sorted(c[3] for c in discovery) == ["/", "/home", "/mnt/pool", "/var/log"]
+    assert sorted(c[:3] for c in poll) == sorted(
+        [["btrfs", "filesystem", "show"], ["btrfs", "device", "stats"], ["btrfs", "scrub", "status"]] * 2
+    )
+
+
+def test_main_exclude_recent_checks_all_filesystems_in_one_batch(monkeypatch):
+    cm = install_command_map(monkeypatch, _subvol_status_map(monkeypatch), statbtrfs)
+    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs", "-d", "7"])
+    statbtrfs.main()
+    assert all(c[0] == "cmds" for c in cm.calls)
+    status_only = [c[1] for c in cm.calls if all(cmd[:3] == ["btrfs", "scrub", "status"] for cmd in c[1])]
+    assert [sorted(cmd[3] for cmd in batch) for batch in status_only] == [["/", "/mnt/pool"]]
+
+
 def test_main_version(monkeypatch):
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs", "-V"])
     with pytest.raises(SystemExit) as ei:
