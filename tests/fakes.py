@@ -106,6 +106,28 @@ SCRUB_RUNNING = [
     "Error summary:    no errors found",
 ]
 
+# Real btrfs-progs 6.14 output in the first seconds of a scrub, before its first progress record:
+# no "Status:" line yet, but "Time left:" only appears while a scrub is running.
+SCRUB_JUST_STARTED = [
+    "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
+    "\tno stats available",
+    "Time left:        0:00:00",
+    "ETA:              Sat Oct 10 20:44:46 2026",
+    "Total to scrub:   400.78MiB",
+    "Bytes scrubbed:   0.00B  (0.00%)",
+    "Rate:             0.00B/s (some device limits set)",
+    "Error summary:    no errors found",
+]
+
+# Real btrfs-progs 6.14 output for a filesystem that was never scrubbed.
+SCRUB_NEVER_REAL = [
+    "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
+    "\tno stats available",
+    "Total to scrub:   400.78MiB",
+    "Rate:             0.00B/s",
+    "Error summary:    no errors found",
+]
+
 SCRUB_FINISHED_ERRORS = [
     "scrub status for 11111111-2222-3333-4444-555555555555",
     "Scrub started:    Thu May  2 09:56:55 2024",
@@ -212,7 +234,7 @@ class FakeBtrfs:
     """
 
     def __init__(self, mounts, polls=2, running=(), finished=(), errors=(), start_results=None,
-                 clock=1_000_000.0, interrupt_on_sleep=None):
+                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0):
         self.mounts = list(mounts)
         self.polls = polls
         self.state = {m: "never" for m in self.mounts}
@@ -229,6 +251,8 @@ class FakeBtrfs:
         self.started = []    # (mount, clock)
         self.cancelled = []
         self.status_polls = 0
+        self.stats_delay = stats_delay
+        self.no_stats_yet = {}
 
     def _run(self, mount):
         self.state[mount] = "running"
@@ -242,6 +266,7 @@ class FakeBtrfs:
         if self.state[mount] == "running":
             return "running", "ERROR: Scrub is already running."
         self._run(mount)
+        self.no_stats_yet[mount] = self.stats_delay
         return "started", f"scrub started on {mount}"
 
     def execute_command(self, command, wait=True):
@@ -270,6 +295,9 @@ class FakeBtrfs:
         if command[:3] == ["btrfs", "scrub", "status"]:
             state = self.state[mount]
             if state == "running":
+                if self.no_stats_yet.get(mount, 0) > 0:
+                    self.no_stats_yet[mount] -= 1
+                    return list(SCRUB_JUST_STARTED)
                 return list(SCRUB_RUNNING)
             if state == "finished":
                 return list(SCRUB_FINISHED_ERRORS if mount in self.errors else SCRUB_FINISHED_OK)

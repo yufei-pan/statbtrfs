@@ -363,6 +363,10 @@ def parse_scrub_status(lines):
     for index, line in enumerate(lines):
         if "Status:" in line:
             scrub_data["scrub_status"] = line.split(":", 1)[1].strip()
+        elif "Time left:" in line and scrub_data["scrub_status"] == "Never":
+            # Until a scrub writes its first progress record, btrfs prints "no stats available" and no
+            # Status: line, but "Time left:" only appears while a scrub is running.
+            scrub_data["scrub_status"] = "running"
         elif "Scrub started:" in line:
             scrub_data["scrub_time"] = line.split(":", 1)[1].strip()
         elif "Rate:" in line:

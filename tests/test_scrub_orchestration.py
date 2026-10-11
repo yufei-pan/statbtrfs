@@ -217,3 +217,20 @@ def test_ctrl_c_at_the_prompt_keeps_scrubs_running(monkeypatch):
 def test_describe_scrub():
     assert statbtrfs.describe_scrub(None) == "status unknown"
     assert statbtrfs.describe_scrub(statbtrfs.parse_scrub_status([])) == "Never"
+
+
+def test_scrub_without_stats_yet_still_counts_as_running(monkeypatch, capsys):
+    # Real btrfs prints "no stats available" (no Status: line) until the scrub's first progress record.
+    fake = FakeBtrfs(["/mnt/a"], polls=4, stats_delay=3).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"])
+    out = capsys.readouterr().out
+    assert fake.status_polls == 5  # 3 without stats + 1 running + 1 finished
+    assert "/mnt/a: finished, OK" in out
+    assert code == statbtrfs.EXIT_OK
+
+
+def test_max_respected_while_scrubs_have_no_stats_yet(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b"], polls=4, stats_delay=3).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-s", "-m", "1", "--scrub_command_lockout", "0", "-i", "1"])
+    # /mnt/b must wait for /mnt/a to finish, not start while /mnt/a shows "no stats available".
+    assert fake.started[1][1] - fake.started[0][1] >= 5

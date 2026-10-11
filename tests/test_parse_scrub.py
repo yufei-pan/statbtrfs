@@ -86,3 +86,19 @@ def test_parse_scrub_has_errors_flag():
     assert statbtrfs.parse_scrub_status(SCRUB_FINISHED_ERRORS)["has_errors"] is True
     assert statbtrfs.parse_scrub_status(SCRUB_FINISHED_OK)["has_errors"] is False
     assert statbtrfs.parse_scrub_status(SCRUB_NEVER)["has_errors"] is False
+
+
+def test_parse_scrub_running_before_first_progress_record():
+    from fakes import SCRUB_JUST_STARTED
+
+    data = statbtrfs.parse_scrub_status(SCRUB_JUST_STARTED)
+    assert data["scrub_status"] == "running"
+    assert data["scrubbed_data"] == "0.00B  (0.00%)"
+
+
+def test_parse_scrub_never_real_output():
+    from fakes import SCRUB_NEVER_REAL
+
+    data = statbtrfs.parse_scrub_status(SCRUB_NEVER_REAL)
+    assert data["scrub_status"] == "Never"
+    assert data["has_errors"] is False
