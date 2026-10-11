@@ -267,6 +267,22 @@ def color_error_count(error_count):
     else:
         return f"{RED}{error_count}{RESET}"
 
+_SCRUB_COUNT_RX = re.compile(r'^\s+(\w+):\s+(\d+)\s*$')
+
+def summarize_scrub_errors(summary, following_lines):
+    """One line for a table cell: the error types plus the non-zero counts indented below them.
+
+    btrfs prints e.g. "Error summary:    csum=3" then "  Corrected: 0", "  Uncorrectable: 3", ...
+    """
+    parts = [summary]
+    for line in following_lines:
+        match = _SCRUB_COUNT_RX.match(line)
+        if not match:
+            break
+        if int(match.group(2)):
+            parts.append(f"{match.group(1).lower()}={match.group(2)}")
+    return " ".join(parts)
+
 def parse_scrub_status(output):
     scrub_data = {}
     lines = output
@@ -286,7 +302,7 @@ def parse_scrub_status(output):
         "scrubbed_data": "N/A",
         "error_summary": "N/A"
     }
-    for line in lines:
+    for index, line in enumerate(lines):
         if "Status:" in line:
             scrub_data["scrub_status"] = line.split(":", 1)[1].strip()
         elif "Scrub started:" in line:
@@ -298,12 +314,11 @@ def parse_scrub_status(output):
         elif "Bytes scrubbed:" in line and scrub_data.get("scrub_status") == "running":
             scrub_data["scrubbed_data"] = line.split(":", 1)[1].strip()
         elif "Error summary:" in line:
-            err_idx = lines.index(line)
-            error_text = "\n".join(lines[err_idx:])
-            if "no errors found" in error_text.lower():
-                scrub_data["error_summary"] = f"{GREEN}OK{RESET}"  # Green-colored OK
+            summary = line.split(":", 1)[1].strip()
+            if "no errors found" in summary.lower():
+                scrub_data["error_summary"] = f"{GREEN}OK{RESET}"
             else:
-                scrub_data["error_summary"] = F"{RED}{error_text}{RESET}"
+                scrub_data["error_summary"] = f"{RED}{summarize_scrub_errors(summary, lines[index + 1:])}{RESET}"
 
     return scrub_data
 

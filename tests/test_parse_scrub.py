@@ -54,3 +54,29 @@ def test_parse_scrub_time_formats():
     assert epoch_iso == datetime.strptime(SCRUB_TIME_ISO, "%Y-%m-%d %H:%M:%S").timestamp()
     assert statbtrfs.parse_scrub_time_to_epoch("N/A") is None
     assert statbtrfs.parse_scrub_time_to_epoch("not a time") is None
+
+
+def test_parse_scrub_error_summary_is_one_line_with_nonzero_counts():
+    data = statbtrfs.parse_scrub_status(SCRUB_FINISHED_ERRORS)
+    assert data["error_summary"] == f"{statbtrfs.RED}csum=3 uncorrectable=3{statbtrfs.RESET}"
+
+
+def test_parse_scrub_error_summary_multiple_types_and_counts():
+    data = statbtrfs.parse_scrub_status([
+        "Status:           finished",
+        "Error summary:    read=1 csum=2",
+        "  Corrected:      3",
+        "  Uncorrectable:  0",
+        "  Unverified:     0",
+    ])
+    assert data["error_summary"] == f"{statbtrfs.RED}read=1 csum=2 corrected=3{statbtrfs.RESET}"
+
+
+def test_parse_scrub_error_summary_stops_at_first_non_count_line():
+    data = statbtrfs.parse_scrub_status([
+        "Error summary:    csum=1",
+        "  Uncorrectable:  1",
+        "Something else:   7",
+        "  Corrected:      9",
+    ])
+    assert data["error_summary"] == f"{statbtrfs.RED}csum=1 uncorrectable=1{statbtrfs.RESET}"
