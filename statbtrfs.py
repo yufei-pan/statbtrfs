@@ -164,7 +164,7 @@ Yc[f,=CI<]7Fo-..a-<r>a$=6J$fV.dA-%unO8*G&[PX*P=`!_$q43b.PC@1#Io68Q'^8F8%k%#:0EI=
 Cql7ofSN&EY,a7;Pod&_QoHf>;L,lrB0^"\L<(Yt8%$UO82_bkgsAou^D@F]NFXH$Vi6:E!!2FtZ0DAj''Y@jZ,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.33'
+version='0.34'
 __version__ = version
 
 # -s runs for hours, often into a log: don't let output sit in a buffer.
