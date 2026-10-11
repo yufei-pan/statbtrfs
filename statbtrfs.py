@@ -167,9 +167,48 @@ def find_btrfs_mounts(filters):
         btrfs_mounts.update(mount_list)
     return btrfs_mounts
 
+def discover_filesystems(mounts):
+    """Group mountpoints into filesystems by UUID: [{'uuid': str | None, 'mounts': [...]}].
+
+    Subvolume mounts of one filesystem share its UUID, and status and scrub are per filesystem.
+    A mount whose UUID can't be read stays on its own (uuid None)."""
+    mounts = list(mounts)
+    if not mounts:
+        return []
+    shows = execute_commands([["btrfs", "filesystem", "show", mount] for mount in mounts])
+    filesystems = []
+    by_uuid = {}
+    for mount, show in zip(mounts, shows):
+        uuid = parse_show_uuid(show)
+        if uuid is not None and uuid in by_uuid:
+            by_uuid[uuid]['mounts'].append(mount)
+            continue
+        fs = {'uuid': uuid, 'mounts': [mount]}
+        filesystems.append(fs)
+        if uuid is not None:
+            by_uuid[uuid] = fs
+    for fs in filesystems:
+        fs['mounts'].sort()
+    return filesystems
+
+def select_filesystems(filesystems, patterns):
+    """Filesystems with any mountpoint matching any pattern (substring glob); all if no patterns."""
+    if not patterns:
+        return list(filesystems)
+    globs = [f'*{pattern}*' for pattern in patterns]
+    return [fs for fs in filesystems if any(fnmatch.filter(fs['mounts'], glob) for glob in globs)]
+
 _SHOW_UUID_RX = re.compile(r'\buuid:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*$')
 _SHOW_TOTAL_RX = re.compile(r'^\s*Total devices\s+(\d+)\s+FS bytes used\s+(\S+)')
 _SHOW_DEVID_RX = re.compile(r'^\s*devid\s+\d+\s+size\s+\S+\s+used\s+\S+\s+path\s+(.+?)\s*$')
+
+def parse_show_uuid(info):
+    for line in info or []:
+        if line.startswith("Label:"):
+            match = _SHOW_UUID_RX.search(line)
+            if match:
+                return match.group(1)
+    return None
 
 def parse_show_info(info):
     """Returns (uuid, fs_used, device_path, missing_device_count) from `btrfs filesystem show`."""
@@ -178,15 +217,11 @@ def parse_show_info(info):
     device_paths = []
     marked_missing = 0
     some_missing = False
-    uuid = None
+    uuid = parse_show_uuid(info)
     for line in info:
         total_match = _SHOW_TOTAL_RX.match(line)
         devid_match = _SHOW_DEVID_RX.match(line)
-        if line.startswith("Label:"):
-            uuid_match = _SHOW_UUID_RX.search(line)
-            if uuid_match:
-                uuid = uuid_match.group(1)
-        elif total_match:
+        if total_match:
             total_devices, fs_used = int(total_match.group(1)), total_match.group(2)
         elif devid_match:
             path = devid_match.group(1)
@@ -283,31 +318,32 @@ def parse_scrub_time_to_epoch(scrub_time):
             continue
     return None
 
-def filter_recently_scrubbed_mounts(btrfs_mounts, exclude_recent_days):
+def filter_recently_scrubbed(filesystems, exclude_recent_days):
+    """Split filesystems into (kept, skipped): skipped finished a scrub within exclude_recent_days."""
     if exclude_recent_days <= 0:
-        return btrfs_mounts, []
+        return filesystems, []
 
     now = time.time()
     cutoff_seconds = exclude_recent_days * 24 * 3600
-    filtered_mounts = set()
-    skipped_mounts = []
+    kept = []
+    skipped = []
 
-    for mount in btrfs_mounts:
-        scrub_output = execute_command(["btrfs", "scrub", "status", mount])
+    for fs in filesystems:
+        scrub_output = execute_command(["btrfs", "scrub", "status", fs['mounts'][0]])
         scrub_data = parse_scrub_status(scrub_output or [])
         scrub_status = scrub_data.get("scrub_status", "").strip().lower()
         scrub_time_epoch = parse_scrub_time_to_epoch(scrub_data["scrub_time"])
 
         if scrub_status != "finished" or scrub_time_epoch is None:
-            filtered_mounts.add(mount)
+            kept.append(fs)
             continue
 
         if now - scrub_time_epoch < cutoff_seconds:
-            skipped_mounts.append(mount)
+            skipped.append(fs)
         else:
-            filtered_mounts.add(mount)
+            kept.append(fs)
 
-    return filtered_mounts, skipped_mounts
+    return kept, skipped
 
 def issue_scrub_command(mounts):
     # print(f"{YELLOW}Issuing scrub on {mount}{RESET}")
@@ -345,18 +381,15 @@ def main():
         pass
     args = parser.parse_args()
 
-    btrfs_mounts = set(find_btrfs_mounts(args.pattern))
-    btrfs_mounts, skipped_mounts = filter_recently_scrubbed_mounts(
-        btrfs_mounts,
-        args.exclude_recent_scrubbed_days
-    )
-    if skipped_mounts:
+    filesystems = select_filesystems(discover_filesystems(find_btrfs_mounts(None)), args.pattern)
+    filesystems, skipped = filter_recently_scrubbed(filesystems, args.exclude_recent_scrubbed_days)
+    if skipped:
         print(
             f"{YELLOW}Skipping mounts scrubbed within the last "
-            f"{args.exclude_recent_scrubbed_days}d: {', '.join(sorted(skipped_mounts))}{RESET}"
+            f"{args.exclude_recent_scrubbed_days}d: {'; '.join(sorted(', '.join(fs['mounts']) for fs in skipped))}{RESET}"
         )
 
-    if not btrfs_mounts:
+    if not filesystems:
         print(f"{RED}No Btrfs mounts found.{RESET}")
         return
 
@@ -366,9 +399,9 @@ def main():
             scrub_count = os.cpu_count()
         else:
             scrub_count = args.max_scrub_count
-        if scrub_count > len(btrfs_mounts):
-            scrub_count = len(btrfs_mounts)
-        scrubber = issue_scrub_command(btrfs_mounts)
+        if scrub_count > len(filesystems):
+            scrub_count = len(filesystems)
+        scrubber = issue_scrub_command([fs['mounts'][0] for fs in filesystems])
         for _ in range(scrub_count):
             scrubed_mounts = next(scrubber)
         print(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
@@ -382,13 +415,8 @@ def main():
                             "scrub_status", "scrub_time", "scrub_rate", "scrubbed_data", "error_summary"]
         table = []
         running_scrubs = []
-        if not btrfs_mounts:
-            print(f"{RED}No Btrfs mounts found.{RESET}")
-            return
-        for mount in btrfs_mounts:
-            mount_dir_name = mount.split("/")[-1]
-            if not mount_dir_name:
-                mount_dir_name = "/"
+        for fs in filesystems:
+            mount = fs['mounts'][0]
             # filesystem_show = execute_command(["btrfs", "filesystem", "show", mount])
             # device_stats = execute_command(["btrfs", "device", "stats", mount])
             # scrub_output = execute_command(["btrfs", "scrub", "status", device_path])
@@ -409,7 +437,7 @@ def main():
             if scrub_data["scrub_status"] == "running":
                 running_scrubs.append(mount)
             table.append([
-                mount_dir_name,
+                ", ".join(fs['mounts']),
                 format_device_path(device_path, missing),
                 fs_used,
                 color_error_count(err_dict.get('write_io_errs', 0)),
@@ -430,7 +458,7 @@ def main():
         if not args.scrub:
             break
         # issue scrub command to next mount if there are less than max_scrub_count scrubs running
-        if len(running_scrubs) < scrub_count and time.time() - scrub_start_time > args.scrub_command_lockout and len(scrubed_mounts) < len(btrfs_mounts):
+        if len(running_scrubs) < scrub_count and time.time() - scrub_start_time > args.scrub_command_lockout and len(scrubed_mounts) < len(filesystems):
             scrubed_mounts = next(scrubber)
             # print(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
             print(f"{GREEN}Scrubed issued to {scrubed_mounts}.{RESET}")

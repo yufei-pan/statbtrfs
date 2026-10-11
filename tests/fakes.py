@@ -123,6 +123,33 @@ SCRUB_TIME_BASIC = "Thu May  2 09:56:55 2024"
 SCRUB_TIME_ISO = "2024-05-02 09:56:55"
 
 
+def uuid_for(n):
+    return f"{n:08x}-0000-0000-0000-000000000000"
+
+
+def make_show(uuid, *devices, used="1.00GiB"):
+    """`btrfs filesystem show` output for one filesystem."""
+    devices = devices or ("/dev/sda1",)
+    lines = [f"Label: none  uuid: {uuid}", f"\tTotal devices {len(devices)} FS bytes used {used}"]
+    lines += [f"\tdevid {i:4d} size 10.00GiB used 2.00GiB path {dev}" for i, dev in enumerate(devices, 1)]
+    return lines
+
+
+# One system disk with three subvolume mounts, plus a separate data pool.
+SUBVOL_MOUNT_LINES = [
+    "/dev/sda2 / btrfs rw,subvol=/@ 0 0",
+    "/dev/sda2 /home btrfs rw,subvol=/@home 0 0",
+    "/dev/sdb /mnt/pool btrfs rw 0 0",
+    "/dev/sda2 /var/log btrfs rw,subvol=/@log 0 0",
+]
+SUBVOL_SHOWS = {
+    "/": make_show(uuid_for(1), "/dev/sda2"),
+    "/home": make_show(uuid_for(1), "/dev/sda2"),
+    "/var/log": make_show(uuid_for(1), "/dev/sda2"),
+    "/mnt/pool": make_show(uuid_for(2), "/dev/sdb", "/dev/sdc"),
+}
+
+
 class CommandMap:
     """Stub for execute_command / execute_commands."""
 

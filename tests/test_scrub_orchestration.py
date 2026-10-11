@@ -8,6 +8,8 @@ from fakes import (
     SHOW_SINGLE,
     STATS_ZERO,
     CommandMap,
+    make_show,
+    uuid_for,
     install_command_map,
     install_mounts,
 )
@@ -56,7 +58,7 @@ def test_main_scrub_first_wave_respects_max_count(monkeypatch, capsys):
         if cmd[:3] == ("btrfs", "scrub", "start"):
             return []
         if cmd[:3] == ("btrfs", "filesystem", "show"):
-            return list(SHOW_SINGLE)
+            return make_show(uuid_for(sum(map(ord, cmd[3]))))
         if cmd[:3] == ("btrfs", "device", "stats"):
             return list(STATS_ZERO)
         if cmd[:3] == ("btrfs", "scrub", "status"):
@@ -173,7 +175,7 @@ def test_main_scrub_exclude_recent_never_starts_skipped(monkeypatch, capsys):
             started.append(cmd[3])
             return []
         if cmd[:3] == ("btrfs", "filesystem", "show"):
-            return list(SHOW_SINGLE)
+            return make_show(uuid_for(sum(map(ord, cmd[3]))))
         if cmd[:3] == ("btrfs", "device", "stats"):
             return list(STATS_ZERO)
         return []
