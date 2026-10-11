@@ -22,6 +22,29 @@ SHOW_MULTI_DEVICE = [
     "devid    2 size 10.00GiB used 2.00GiB path /dev/nvme1n1",
 ]
 
+# Label text that contains the words the old substring parser keyed on.
+SHOW_TRICKY_LABEL = [
+    "Label: 'backup path: Total devices uuid: x'  uuid: 11111111-2222-3333-4444-555555555555",
+    "\tTotal devices 1 FS bytes used 12.34GiB",
+    "\tdevid    1 size 100.00GiB used 50.00GiB path /dev/sda1",
+]
+
+# Mounted degraded: btrfs omits the unopenable device and adds a marker line.
+SHOW_DEGRADED = [
+    "Label: none  uuid: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "\tTotal devices 2 FS bytes used 1.00GiB",
+    "\tdevid    1 size 10.00GiB used 2.00GiB path /dev/nvme0n1",
+    "\t*** Some devices missing",
+]
+
+# Newer btrfs-progs list the missing device itself.
+SHOW_DEGRADED_MARKED = [
+    "Label: none  uuid: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "\tTotal devices 2 FS bytes used 1.00GiB",
+    "\tdevid    1 size 10.00GiB used 2.00GiB path /dev/nvme0n1",
+    "\tdevid    2 size 0 used 0 path <missing disk #2> MISSING",
+]
+
 SHOW_INCOMPLETE = [
     "Label: none  uuid: 11111111-2222-3333-4444-555555555555",
     "Total devices 1 FS bytes used 1.00GiB",

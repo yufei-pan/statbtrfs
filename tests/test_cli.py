@@ -5,6 +5,7 @@ from fakes import (
     MOUNT_LINES_MULTI,
     MOUNT_LINES_SINGLE,
     SCRUB_FINISHED_OK,
+    SHOW_DEGRADED,
     SHOW_MULTI_DEVICE,
     SHOW_SINGLE,
     STATS_MULTI_DEVICE,
@@ -91,6 +92,27 @@ def test_main_table_shows_errors_from_every_device(monkeypatch, capsys):
     assert cells["f_err"] == statbtrfs.color_error_count(2)
     assert cells["bit_rot"] == statbtrfs.color_error_count(42)
     assert cells["gen_err"] == statbtrfs.color_error_count(0)
+
+
+def test_main_table_flags_degraded_filesystem(monkeypatch, capsys):
+    cm = _status_map_for_mounts(
+        monkeypatch,
+        MOUNT_LINES_SINGLE,
+        {"/mnt/a": (SHOW_DEGRADED, STATS_ZERO, SCRUB_FINISHED_OK)},
+    )
+    install_command_map(monkeypatch, cm, statbtrfs)
+    captured = {}
+
+    def fake_table(rows, header=None):
+        captured["rows"], captured["header"] = rows, header
+        return "TABLE"
+
+    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", fake_table)
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
+    statbtrfs.main()
+    (row,) = captured["rows"]
+    cells = dict(zip(captured["header"], row))
+    assert cells["Path"] == statbtrfs.format_device_path("/dev/nvme0n1", 1)
 
 
 def test_main_version(monkeypatch):

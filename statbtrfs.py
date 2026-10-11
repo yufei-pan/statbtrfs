@@ -167,22 +167,47 @@ def find_btrfs_mounts(filters):
         btrfs_mounts.update(mount_list)
     return btrfs_mounts
 
+_SHOW_UUID_RX = re.compile(r'\buuid:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*$')
+_SHOW_TOTAL_RX = re.compile(r'^\s*Total devices\s+(\d+)\s+FS bytes used\s+(\S+)')
+_SHOW_DEVID_RX = re.compile(r'^\s*devid\s+\d+\s+size\s+\S+\s+used\s+\S+\s+path\s+(.+?)\s*$')
+
 def parse_show_info(info):
+    """Returns (uuid, fs_used, device_path, missing_device_count) from `btrfs filesystem show`."""
     fs_used = None
+    total_devices = None
     device_paths = []
+    marked_missing = 0
+    some_missing = False
     uuid = None
     for line in info:
-        if "uuid:" in line:
-            uuid = line.split("uuid:")[1].split()[0].strip()
-        if "Total devices" in line:
-            fs_used = line.split("FS bytes used")[1].strip()
-        if "path" in line:
-            device_paths.append(line.split("path")[1].strip())
+        total_match = _SHOW_TOTAL_RX.match(line)
+        devid_match = _SHOW_DEVID_RX.match(line)
+        if line.startswith("Label:"):
+            uuid_match = _SHOW_UUID_RX.search(line)
+            if uuid_match:
+                uuid = uuid_match.group(1)
+        elif total_match:
+            total_devices, fs_used = int(total_match.group(1)), total_match.group(2)
+        elif devid_match:
+            path = devid_match.group(1)
+            # Newer btrfs-progs list a missing device as "<missing disk #N> MISSING".
+            if path.startswith("<missing") or path.endswith(" MISSING"):
+                marked_missing += 1
+            else:
+                device_paths.append(path)
+        elif "*** Some devices missing" in line:
+            some_missing = True
+    missing = max(marked_missing, (total_devices or 0) - len(device_paths), int(some_missing))
     device_path = ", ".join(device_paths) if device_paths else None
     if fs_used is None or device_path is None or uuid is None:
         print(f"{RED}Could not parse btrfs show info.{RESET}")
         print(f"Output from btrfs filesystem show was:\n{info}")
-    return uuid, fs_used, device_path
+    return uuid, fs_used, device_path, missing
+
+def format_device_path(device_path, missing):
+    if not missing:
+        return device_path
+    return f"{device_path}, {RED}{missing} missing{RESET}"
 
 def parse_device_stats(stats):
     # Multi-device filesystems print one block per device; sum each counter across devices.
@@ -373,7 +398,7 @@ def main():
                 ["btrfs", "scrub", "status", mount]
             ])
             #filesystem_show = multiCMD.run_command(["btrfs", "filesystem", "show", mount],quiet=True)
-            uuid, fs_used, device_path = parse_show_info(filesystem_show)
+            uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
             if uuid is None or fs_used is None or device_path is None:
                 print(f"{RED}Could not fetch complete info for {mount}. Skipping...{RESET}")
                 continue
@@ -385,7 +410,7 @@ def main():
                 running_scrubs.append(mount)
             table.append([
                 mount_dir_name,
-                device_path,
+                format_device_path(device_path, missing),
                 fs_used,
                 color_error_count(err_dict.get('write_io_errs', 0)),
                 color_error_count(err_dict.get('read_io_errs', 0)),
