@@ -168,13 +168,15 @@ def parse_show_info(info):
     return uuid, fs_used, device_path
 
 def parse_device_stats(stats):
+    # Multi-device filesystems print one block per device; sum each counter across devices.
     err_dict = {}
     for line in stats:
         parts = line.split()
-        if len(parts) != 2:
+        if len(parts) != 2 or not parts[1].isdigit():
             continue
         key, val = parts
-        err_dict[key.split(".")[-1]] = val
+        key = key.split(".")[-1]
+        err_dict[key] = err_dict.get(key, 0) + int(val)
     return err_dict
 
 def color_error_count(error_count):
@@ -334,7 +336,7 @@ def main():
 
     
     while True:
-        header = ["Mount", "Path", "FS Used", "w_err", "r_err", "bit_rot", "gen_err",
+        header = ["Mount", "Path", "FS Used", "w_err", "r_err", "f_err", "bit_rot", "gen_err",
                             "scrub_status", "scrub_time", "scrub_rate", "scrubbed_data", "error_summary"]
         table = []
         running_scrubs = []
@@ -370,6 +372,7 @@ def main():
                 fs_used,
                 color_error_count(err_dict.get('write_io_errs', 0)),
                 color_error_count(err_dict.get('read_io_errs', 0)),
+                color_error_count(err_dict.get('flush_io_errs', 0)),
                 color_error_count(err_dict.get('corruption_errs', 0)),
                 color_error_count(err_dict.get('generation_errs', 0)),
                 scrub_data["scrub_status"],

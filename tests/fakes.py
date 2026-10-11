@@ -42,6 +42,20 @@ STATS_NONZERO = [
     "not-a-stat-line",
 ]
 
+# Errors on the first device, last device mostly clean: a last-line-wins parser reports ~0.
+STATS_MULTI_DEVICE = [
+    "[/dev/nvme0n1].write_io_errs    7",
+    "[/dev/nvme0n1].read_io_errs     0",
+    "[/dev/nvme0n1].flush_io_errs    2",
+    "[/dev/nvme0n1].corruption_errs  40",
+    "[/dev/nvme0n1].generation_errs  0",
+    "[/dev/nvme1n1].write_io_errs    0",
+    "[/dev/nvme1n1].read_io_errs     1",
+    "[/dev/nvme1n1].flush_io_errs    0",
+    "[/dev/nvme1n1].corruption_errs  2",
+    "[/dev/nvme1n1].generation_errs  0",
+]
+
 SCRUB_NEVER = [
     "scrub status for 11111111-2222-3333-4444-555555555555",
     "no stats available",

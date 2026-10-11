@@ -5,7 +5,9 @@ from fakes import (
     MOUNT_LINES_MULTI,
     MOUNT_LINES_SINGLE,
     SCRUB_FINISHED_OK,
+    SHOW_MULTI_DEVICE,
     SHOW_SINGLE,
+    STATS_MULTI_DEVICE,
     STATS_ZERO,
     CommandMap,
     install_command_map,
@@ -59,6 +61,30 @@ def test_main_pattern_filters_mounts(monkeypatch, capsys):
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs", "data"])
     statbtrfs.main()
     assert "ROWS=1" in capsys.readouterr().out
+
+
+def test_main_table_shows_errors_from_every_device(monkeypatch, capsys):
+    cm = _status_map_for_mounts(
+        MOUNT_LINES_SINGLE,
+        {"/mnt/a": (SHOW_MULTI_DEVICE, STATS_MULTI_DEVICE, SCRUB_FINISHED_OK)},
+    )
+    install_command_map(monkeypatch, cm, statbtrfs)
+    captured = {}
+
+    def fake_table(rows, header=None):
+        captured["rows"], captured["header"] = rows, header
+        return "TABLE"
+
+    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", fake_table)
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
+    statbtrfs.main()
+    (row,) = captured["rows"]
+    cells = dict(zip(captured["header"], row))
+    assert cells["w_err"] == statbtrfs.color_error_count(7)
+    assert cells["r_err"] == statbtrfs.color_error_count(1)
+    assert cells["f_err"] == statbtrfs.color_error_count(2)
+    assert cells["bit_rot"] == statbtrfs.color_error_count(42)
+    assert cells["gen_err"] == statbtrfs.color_error_count(0)
 
 
 def test_main_version(monkeypatch):
