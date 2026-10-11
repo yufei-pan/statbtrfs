@@ -108,7 +108,7 @@ hC&:PC:E%[FANK#cH#@/_I>:!&/)=\B\c="2%19!$[Zl]el65mfBHS+OJM(bb*[5$&m0lZ\p2AiZ-`3@
 #-H=)K\O@*IBaYQY*5)<QXXiqV0<g`TS`9^5\A`eL3h(@';$d4&U,IgcO]eX`!!/HMqptiKQG749Z,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.32'
+version='0.33'
 __version__ = version
 
 # -s runs for hours, often into a log: don't let output sit in a buffer.
