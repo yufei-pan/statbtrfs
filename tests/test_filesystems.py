@@ -17,6 +17,12 @@ def test_discover_groups_mounts_by_uuid(monkeypatch):
     }
 
 
+def test_discover_orders_filesystems_by_first_mountpoint(monkeypatch):
+    _show_map(monkeypatch, SUBVOL_SHOWS)
+    filesystems = statbtrfs.discover_filesystems(["/mnt/pool", "/var/log", "/home", "/"])
+    assert [fs["mounts"][0] for fs in filesystems] == ["/", "/mnt/pool"]
+
+
 def test_discover_keeps_unparseable_mounts_separate(monkeypatch):
     _show_map(monkeypatch, {})  # every show returns []
     filesystems = statbtrfs.discover_filesystems(["/x", "/y"])

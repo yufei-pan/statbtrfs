@@ -158,6 +158,7 @@ def parse_proc_mounts(lines):
     return mounts
 
 def find_btrfs_mounts(filters):
+    """Sorted btrfs mountpoints, optionally only those matching any pattern (substring glob)."""
     mount_list = parse_proc_mounts(read_proc_mounts())
     btrfs_mounts = set()
     if filters:
@@ -165,7 +166,7 @@ def find_btrfs_mounts(filters):
             btrfs_mounts.update(fnmatch.filter(mount_list, f'*{pattern}*'))
     else:
         btrfs_mounts.update(mount_list)
-    return btrfs_mounts
+    return sorted(btrfs_mounts)
 
 def discover_filesystems(mounts):
     """Group mountpoints into filesystems by UUID: [{'uuid': str | None, 'mounts': [...]}].
@@ -189,6 +190,8 @@ def discover_filesystems(mounts):
             by_uuid[uuid] = fs
     for fs in filesystems:
         fs['mounts'].sort()
+    # Stable order for the table and the scrub queue.
+    filesystems.sort(key=lambda fs: fs['mounts'][0])
     return filesystems
 
 def select_filesystems(filesystems, patterns):

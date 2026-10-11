@@ -136,7 +136,7 @@ def test_main_lists_each_filesystem_once(monkeypatch):
     monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", fake_table)
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
     statbtrfs.main()
-    mounts = sorted(dict(zip(captured["header"], row))["Mount"] for row in captured["rows"])
+    mounts = [dict(zip(captured["header"], row))["Mount"] for row in captured["rows"]]
     assert mounts == ["/, /home, /var/log", "/mnt/pool"]
 
 
@@ -149,9 +149,7 @@ def test_main_scrub_starts_once_per_filesystem(monkeypatch):
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs", "-s", "--scrub_command_lockout", "0", "-i", "1"])
     statbtrfs.main()
     starts = [c[1][3] for c in cm.calls if c[0] == "cmd" and c[1][:3] == ["btrfs", "scrub", "start"]]
-    assert len(starts) == 2
-    assert "/mnt/pool" in starts
-    assert len(set(starts) & {"/", "/home", "/var/log"}) == 1
+    assert starts == ["/", "/mnt/pool"]
 
 
 def test_main_version(monkeypatch):
