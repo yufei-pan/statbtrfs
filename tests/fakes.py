@@ -45,6 +45,14 @@ SHOW_DEGRADED_MARKED = [
     "\tdevid    2 size 0 used 0 path <missing disk #2> MISSING",
 ]
 
+# Real btrfs-progs 6.14, RAID1 mounted -o degraded with devid 2 gone: an empty path, then MISSING.
+SHOW_DEGRADED_REAL = [
+    "Label: 'statbtrfs-live'  uuid: 76f821a1-8129-4147-b0f1-436771be839f",
+    "\tTotal devices 2 FS bytes used 200.39MiB",
+    "\tdevid    1 size 512.00MiB used 427.00MiB path /dev/loop3",
+    "\tdevid    2 size 0 used 0 path  MISSING",
+]
+
 SHOW_INCOMPLETE = [
     "Label: none  uuid: 11111111-2222-3333-4444-555555555555",
     "Total devices 1 FS bytes used 1.00GiB",

@@ -69,3 +69,11 @@ def test_format_device_path_flags_missing_in_red():
     cell = statbtrfs.format_device_path("/dev/sda", 2)
     assert cell.startswith("/dev/sda, ")
     assert f"{statbtrfs.RED}2 missing{statbtrfs.RESET}" in cell
+
+
+def test_parse_show_real_degraded_output():
+    from fakes import SHOW_DEGRADED_REAL
+
+    uuid, fs_used, device_path, missing = statbtrfs.parse_show_info(SHOW_DEGRADED_REAL)
+    assert device_path == "/dev/loop3"
+    assert missing == 1

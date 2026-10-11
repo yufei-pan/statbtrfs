@@ -295,8 +295,9 @@ def parse_show_info(info):
             total_devices, fs_used = int(total_match.group(1)), total_match.group(2)
         elif devid_match:
             path = devid_match.group(1)
-            # Newer btrfs-progs list a missing device as "<missing disk #N> MISSING".
-            if path.startswith("<missing") or path.endswith(" MISSING"):
+            # A missing device is listed as "path  MISSING" (btrfs-progs 6.x: empty path)
+            # or "path <missing disk #N> MISSING".
+            if path.split()[-1] == "MISSING" or path.startswith("<missing"):
                 marked_missing += 1
             else:
                 device_paths.append(path)
