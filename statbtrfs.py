@@ -640,14 +640,18 @@ def scrub_interrupted(started, adopted, running, queue):
     return EXIT_INTERRUPTED
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Check Btrfs filesystem status.")
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Check Btrfs filesystem status.",
+        epilog="Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); "
+               "2 the check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted.")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
     mode.add_argument("-w", "--watch", action="store_true",
                       help="Refresh every -i seconds while any scrub is running, then exit (never starts scrubs)")
     parser.add_argument("-i", "--interval", help="Interval for status check in seconds", default=2, type=int)
-    parser.add_argument("-m", "--max_scrub_count", help="Maximum number of scrubs to issue at the same time", default=32, type=int)
+    parser.add_argument("-m", "--max-scrub-count", dest="max_scrub_count", default=32, type=int,
+                        help="Maximum number of scrubs running at the same time (0: one per CPU)")
     parser.add_argument(
         "-d",
         "--exclude-recent-scrubbed-days",
@@ -655,11 +659,19 @@ def main():
         default=0,
         type=int
     )
-    parser.add_argument("--scrub_command_lockout", help="Lockout for scrub command. Used to block two commands sent quickly.", default=10, type=int)
+    parser.add_argument("--scrub-command-lockout", dest="scrub_command_lockout", default=10, type=int,
+                        help="Seconds to wait after starting a scrub before starting another")
+    # Old underscore spellings, still accepted.
+    parser.add_argument("--max_scrub_count", dest="max_scrub_count", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    parser.add_argument("--scrub_command_lockout", dest="scrub_command_lockout", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     parser.add_argument("--color", choices=["auto", "always", "never"], default="auto",
                         help="Colour output: auto (default) on a terminal unless NO_COLOR is set")
     parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs mounts. Default="*"')
     parser.add_argument('-V', '--version', action='version', version=f"%(prog)s {version} stat btrfs by pan@zopyr.us")
+    return parser
+
+def main():
+    parser = build_parser()
     try:
         import argcomplete
         argcomplete.autocomplete(parser,always_complete_options='long')
