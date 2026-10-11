@@ -595,6 +595,19 @@ def scrub_filesystems(filesystems, args, screen):
             print(f"  {mount}: {prefix}{describe_scrub(status.scrubs.get(mount))}")
     return exit_code(status.problems, status.failures or bool(failed))
 
+def watch_filesystems(filesystems, args, screen):
+    """-w: refresh the table until no scrub is running; never starts one. Returns the exit code."""
+    try:
+        while True:
+            status = build_status(poll_filesystems(filesystems))
+            screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
+            if not status.running:
+                return exit_code(status.problems, status.failures)
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print()
+        return EXIT_INTERRUPTED
+
 def scrub_interrupted(started, adopted, running, queue):
     """Ctrl-C during -s. Scrubs keep running (they run in their own session) unless the user,
     asked on a terminal, cancels the ones this run started."""
@@ -629,7 +642,10 @@ def scrub_interrupted(started, adopted, running, queue):
 
 def main():
     parser = argparse.ArgumentParser(description="Check Btrfs filesystem status.")
-    parser.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
+    mode.add_argument("-w", "--watch", action="store_true",
+                      help="Refresh every -i seconds while any scrub is running, then exit (never starts scrubs)")
     parser.add_argument("-i", "--interval", help="Interval for status check in seconds", default=2, type=int)
     parser.add_argument("-m", "--max_scrub_count", help="Maximum number of scrubs to issue at the same time", default=32, type=int)
     parser.add_argument(
@@ -654,7 +670,7 @@ def main():
     set_color(use_color)
     # sudo drops NO_COLOR and may give us its own pty: pass the decision on to a re-exec.
     acquire_root([f"--color={'always' if use_color else 'never'}"] + sys.argv[1:])
-    screen = Screen(redraw=args.scrub and sys.stdout.isatty())
+    screen = Screen(redraw=(args.scrub or args.watch) and sys.stdout.isatty())
 
     filesystems = select_filesystems(discover_filesystems(find_btrfs_mounts(None)), args.pattern)
     if not filesystems:
@@ -674,6 +690,8 @@ def main():
 
     if args.scrub:
         return scrub_filesystems(filesystems, args, screen)
+    if args.watch:
+        return watch_filesystems(filesystems, args, screen)
 
     status = build_status(poll_filesystems(filesystems))
     screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
