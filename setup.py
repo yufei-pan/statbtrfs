@@ -17,8 +17,7 @@ setup(
         ],
     },
     install_requires=[
-		'multiCMD>=1.47',
-        'argparse',
+        'multiCMD>=1.51',
     ],
     extras_require={
         'completion': [
@@ -31,5 +30,5 @@ setup(
         'Operating System :: POSIX :: Linux',
     ],
     python_requires='>=3.6',
-	license='GPLv3+',
+    license='GPLv3+',
 )
