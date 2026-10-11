@@ -18,6 +18,16 @@ def _assume_root(monkeypatch):
     monkeypatch.setattr(statbtrfs, "_is_root", lambda: True, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _restore_colors():
+    """main() switches colours off when stdout is not a terminal (as under pytest)."""
+    import statbtrfs
+
+    saved = (statbtrfs.RED, statbtrfs.GREEN, statbtrfs.YELLOW, statbtrfs.RESET)
+    yield
+    statbtrfs.RED, statbtrfs.GREEN, statbtrfs.YELLOW, statbtrfs.RESET = saved
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",

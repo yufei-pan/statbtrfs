@@ -80,3 +80,9 @@ def test_parse_scrub_error_summary_stops_at_first_non_count_line():
         "  Corrected:      9",
     ])
     assert data["error_summary"] == f"{statbtrfs.RED}csum=1 uncorrectable=1{statbtrfs.RESET}"
+
+
+def test_parse_scrub_has_errors_flag():
+    assert statbtrfs.parse_scrub_status(SCRUB_FINISHED_ERRORS)["has_errors"] is True
+    assert statbtrfs.parse_scrub_status(SCRUB_FINISHED_OK)["has_errors"] is False
+    assert statbtrfs.parse_scrub_status(SCRUB_NEVER)["has_errors"] is False

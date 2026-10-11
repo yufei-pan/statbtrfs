@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
 import argparse
+import functools
 import time
 import os
 import sys
@@ -108,11 +109,59 @@ hC&:PC:E%[FANK#cH#@/_I>:!&/)=\B\c="2%19!$[Zl]el65mfBHS+OJM(bb*[5$&m0lZ\p2AiZ-`3@
 version='0.32'
 __version__ = version
 
-# Colors
-RED = "\033[91m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-RESET = "\033[0m"
+# -s runs for hours, often into a log: don't let output sit in a buffer.
+print = functools.partial(print, flush=True)
+
+EXIT_OK = 0        # healthy
+EXIT_PROBLEMS = 1  # device errors, scrub errors or missing devices found
+EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, no root
+
+# Colors (set_color(False) blanks them)
+_ANSI_COLORS = ("\033[91m", "\033[92m", "\033[93m", "\033[0m")
+RED, GREEN, YELLOW, RESET = _ANSI_COLORS
+
+def resolve_color(mode):
+    """--color: always / never / auto (a terminal, unless NO_COLOR is set to anything non-empty)."""
+    if mode == 'always':
+        return True
+    if mode == 'never':
+        return False
+    return sys.stdout.isatty() and not os.environ.get('NO_COLOR')
+
+def set_color(enabled):
+    global RED, GREEN, YELLOW, RESET
+    RED, GREEN, YELLOW, RESET = _ANSI_COLORS if enabled else ("",) * 4
+
+CLEAR_SCREEN = "\033[H\033[2J"
+EVENT_LINES = 10
+
+class Screen:
+    """Prints status tables. With redraw (-s on a terminal) each table replaces the previous one and
+    recent messages stay listed under it; otherwise everything is appended, which suits logs."""
+
+    def __init__(self, redraw):
+        self.redraw = redraw
+        self.events = []
+
+    def event(self, message):
+        if self.redraw:
+            self.events = (self.events + [message])[-EVENT_LINES:]
+        else:
+            print(message)
+
+    def flush(self):
+        """Print held messages when no table will follow."""
+        if self.redraw and self.events:
+            print("\n".join(self.events))
+        self.events = []
+
+    def show(self, table, notes=()):
+        lines = list(notes)
+        if not self.redraw:
+            print("\n".join([table] + lines))
+            return
+        lines += self.events
+        print(CLEAR_SCREEN + table + ("\n\n" + "\n".join(lines) if lines else ""))
 
 # Prefix each btrfs command with sudo. Set by acquire_root() for the per-command fallback.
 USE_SUDO = os.geteuid() != 0
@@ -134,7 +183,7 @@ def acquire_root(argv):
     sudo = shutil.which('sudo')
     if not sudo:
         print(f"{RED}statbtrfs needs root: run it as root or install sudo.{RESET}")
-        sys.exit(1)
+        sys.exit(EXIT_FAILURE)
     command = [sys.executable, os.path.abspath(__file__)] + list(argv)
     # -l: may the user run this exact command? Without a terminal, never wait for a password.
     check = [sudo, '-l', '--'] if sys.stdin.isatty() else [sudo, '-n', '-l', '--']
@@ -315,7 +364,8 @@ def parse_scrub_status(output):
         "scrub_time": "N/A",
         "scrub_rate": "N/A",
         "scrubbed_data": "N/A",
-        "error_summary": "N/A"
+        "error_summary": "N/A",
+        "has_errors": False,
     }
     for index, line in enumerate(lines):
         if "Status:" in line:
@@ -334,6 +384,7 @@ def parse_scrub_status(output):
                 scrub_data["error_summary"] = f"{GREEN}OK{RESET}"
             else:
                 scrub_data["error_summary"] = f"{RED}{summarize_scrub_errors(summary, lines[index + 1:])}{RESET}"
+                scrub_data["has_errors"] = True
 
     return scrub_data
 
@@ -391,6 +442,50 @@ def poll_filesystems(filesystems):
     outputs = [output or [] for output in execute_commands(commands)] if commands else []
     return [(fs, *outputs[3 * i:3 * i + 3]) for i, fs in enumerate(filesystems)]
 
+TABLE_HEADER = ["Mount", "Path", "FS Used", "w_err", "r_err", "f_err", "bit_rot", "gen_err",
+                "scrub_status", "scrub_time", "scrub_rate", "scrubbed_data", "error_summary"]
+
+def build_status(polled):
+    """From poll_filesystems() output: (rows, running filesystems, problems found, failures, notes).
+
+    problems: device errors, scrub errors or missing devices. failures: filesystems that couldn't be read."""
+    rows, running, notes = [], [], []
+    problems = failures = False
+    for fs, filesystem_show, device_stats, scrub_output in polled:
+        uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
+        if uuid is None or fs_used is None or device_path is None:
+            notes.append(f"{RED}Could not fetch complete info for {', '.join(fs['mounts'])}. Skipping...{RESET}")
+            failures = True
+            continue
+        err_dict = parse_device_stats(device_stats)
+        scrub_data = parse_scrub_status(scrub_output)
+        if scrub_data["scrub_status"] == "running":
+            running.append(fs)
+        if missing or any(err_dict.values()) or scrub_data["has_errors"]:
+            problems = True
+        rows.append([
+            ", ".join(fs['mounts']),
+            format_device_path(device_path, missing),
+            fs_used,
+            color_error_count(err_dict.get('write_io_errs', 0)),
+            color_error_count(err_dict.get('read_io_errs', 0)),
+            color_error_count(err_dict.get('flush_io_errs', 0)),
+            color_error_count(err_dict.get('corruption_errs', 0)),
+            color_error_count(err_dict.get('generation_errs', 0)),
+            scrub_data["scrub_status"],
+            scrub_data["scrub_time"],
+            scrub_data["scrub_rate"],
+            scrub_data["scrubbed_data"],
+            scrub_data["error_summary"]
+        ])
+    return rows, running, problems, failures, notes
+
+def exit_code(problems, failures):
+    # A health problem matters more than a filesystem we couldn't read.
+    if problems:
+        return EXIT_PROBLEMS
+    return EXIT_FAILURE if failures else EXIT_OK
+
 def issue_scrub_command(mounts):
     # print(f"{YELLOW}Issuing scrub on {mount}{RESET}")
     # execute_command(['bash','-c',f"btrfs scrub start {mount}"],wait=False)
@@ -418,6 +513,8 @@ def main():
         type=int
     )
     parser.add_argument("--scrub_command_lockout", help="Lockout for scrub command. Used to block two commands sent quickly.", default=10, type=int)
+    parser.add_argument("--color", choices=["auto", "always", "never"], default="auto",
+                        help="Colour output: auto (default) on a terminal unless NO_COLOR is set")
     parser.add_argument('pattern',nargs='*',help='Patterns to filter btrfs mounts. Default="*"')
     parser.add_argument('-V', '--version', action='version', version=f"%(prog)s {version} stat btrfs by pan@zopyr.us")
     try:
@@ -426,19 +523,27 @@ def main():
     except ImportError:
         pass
     args = parser.parse_args()
-    acquire_root(sys.argv[1:])
+    use_color = resolve_color(args.color)
+    set_color(use_color)
+    # sudo drops NO_COLOR and may give us its own pty: pass the decision on to a re-exec.
+    acquire_root([f"--color={'always' if use_color else 'never'}"] + sys.argv[1:])
+    screen = Screen(redraw=args.scrub and sys.stdout.isatty())
 
     filesystems = select_filesystems(discover_filesystems(find_btrfs_mounts(None)), args.pattern)
+    if not filesystems:
+        print(f"{RED}No Btrfs mounts found.{RESET}")
+        return EXIT_FAILURE
     filesystems, skipped = filter_recently_scrubbed(filesystems, args.exclude_recent_scrubbed_days)
     if skipped:
-        print(
+        screen.event(
             f"{YELLOW}Skipping mounts scrubbed within the last "
             f"{args.exclude_recent_scrubbed_days}d: {'; '.join(sorted(', '.join(fs['mounts']) for fs in skipped))}{RESET}"
         )
-
     if not filesystems:
-        print(f"{RED}No Btrfs mounts found.{RESET}")
-        return
+        screen.flush()
+        print(f"{GREEN}Every matching filesystem was scrubbed within the last "
+              f"{args.exclude_recent_scrubbed_days}d; nothing to do.{RESET}")
+        return EXIT_OK
 
     # If the scrub flag is enabled, issue the scrub command to all mounts
     if args.scrub:
@@ -451,55 +556,20 @@ def main():
         scrubber = issue_scrub_command([fs['mounts'][0] for fs in filesystems])
         for _ in range(scrub_count):
             scrubed_mounts = next(scrubber)
-        print(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
+        screen.event(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
         scrub_start_time = time.time()
-        #print(f'{GREEN}Scrub all issued!{RESET}')
         time.sleep(args.interval)
 
-    
     while True:
-        header = ["Mount", "Path", "FS Used", "w_err", "r_err", "f_err", "bit_rot", "gen_err",
-                            "scrub_status", "scrub_time", "scrub_rate", "scrubbed_data", "error_summary"]
-        table = []
-        running_scrubs = []
-        for fs, filesystem_show, device_stats, scrub_output in poll_filesystems(filesystems):
-            mount = fs['mounts'][0]
-            uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
-            if uuid is None or fs_used is None or device_path is None:
-                print(f"{RED}Could not fetch complete info for {mount}. Skipping...{RESET}")
-                continue
-            #device_stats = multiCMD.run_command(["btrfs", "device", "stats", mount],quiet=True)
-            err_dict = parse_device_stats(device_stats)
-            #scrub_output = multiCMD.run_command(["btrfs", "scrub", "status", device_path],quiet=True)
-            scrub_data = parse_scrub_status(scrub_output)
-            if scrub_data["scrub_status"] == "running":
-                running_scrubs.append(mount)
-            table.append([
-                ", ".join(fs['mounts']),
-                format_device_path(device_path, missing),
-                fs_used,
-                color_error_count(err_dict.get('write_io_errs', 0)),
-                color_error_count(err_dict.get('read_io_errs', 0)),
-                color_error_count(err_dict.get('flush_io_errs', 0)),
-                color_error_count(err_dict.get('corruption_errs', 0)),
-                color_error_count(err_dict.get('generation_errs', 0)),
-                scrub_data["scrub_status"],
-                scrub_data["scrub_time"],
-                scrub_data["scrub_rate"],
-                scrub_data["scrubbed_data"],
-                scrub_data["error_summary"]
-            ])
-
-        print(multiCMD.pretty_format_table(table,header = header))
-
+        rows, running_scrubs, problems, failures, notes = build_status(poll_filesystems(filesystems))
+        screen.show(multiCMD.pretty_format_table(rows, header=TABLE_HEADER), notes)
 
         if not args.scrub:
             break
         # issue scrub command to next mount if there are less than max_scrub_count scrubs running
         if len(running_scrubs) < scrub_count and time.time() - scrub_start_time > args.scrub_command_lockout and len(scrubed_mounts) < len(filesystems):
             scrubed_mounts = next(scrubber)
-            # print(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
-            print(f"{GREEN}Scrubed issued to {scrubed_mounts}.{RESET}")
+            screen.event(f"{GREEN}Scrubed issued to {scrubed_mounts}.{RESET}")
             scrub_start_time = time.time()
 
         if len(running_scrubs) == 0 and time.time() - scrub_start_time > args.scrub_command_lockout:
@@ -507,6 +577,7 @@ def main():
             break
 
         time.sleep(args.interval)
+    return exit_code(problems, failures)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -44,7 +44,7 @@ def test_acquire_root_without_sudo_exits(monkeypatch, capsys):
     monkeypatch.setattr(statbtrfs.shutil, "which", lambda name: None)
     with pytest.raises(SystemExit) as ei:
         statbtrfs.acquire_root([])
-    assert ei.value.code == 1
+    assert ei.value.code == statbtrfs.EXIT_FAILURE == 2
     assert "needs root" in capsys.readouterr().out
 
 

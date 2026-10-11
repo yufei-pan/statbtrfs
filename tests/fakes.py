@@ -185,6 +185,17 @@ def install_mounts(monkeypatch, module, lines):
     monkeypatch.setattr(module, "read_proc_mounts", lambda: list(lines))
 
 
+def install_status(monkeypatch, module, per_mount):
+    """Serve /proc/self/mounts plus show/stats/scrub status output: {mount: (show, stats, scrub)}."""
+    install_mounts(monkeypatch, module, [f"/dev/sdx {mount} btrfs rw 0 0" for mount in per_mount])
+    mapping = {}
+    for mount, (show, stats, scrub) in per_mount.items():
+        mapping[("btrfs", "filesystem", "show", mount)] = show
+        mapping[("btrfs", "device", "stats", mount)] = stats
+        mapping[("btrfs", "scrub", "status", mount)] = scrub
+    return install_command_map(monkeypatch, CommandMap(mapping), module)
+
+
 def install_command_map(monkeypatch, command_map, module):
     monkeypatch.setattr(module, "execute_command", command_map.execute_command)
     monkeypatch.setattr(module, "execute_commands", command_map.execute_commands)

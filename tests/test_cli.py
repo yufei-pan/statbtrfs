@@ -197,4 +197,4 @@ def test_main_exclude_recent_prints_skip(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Skipping mounts scrubbed within the last 7d" in out
     assert "/mnt/a" in out
-    assert "No Btrfs mounts found." in out
+    assert "nothing to do" in out
