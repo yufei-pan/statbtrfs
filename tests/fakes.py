@@ -200,3 +200,99 @@ def install_command_map(monkeypatch, command_map, module):
     monkeypatch.setattr(module, "execute_command", command_map.execute_command)
     monkeypatch.setattr(module, "execute_commands", command_map.execute_commands)
     return command_map
+
+
+class FakeBtrfs:
+    """Simulated filesystems for -s / -w tests.
+
+    Each mount is its own filesystem. start_scrub() marks a mount running; a running scrub
+    finishes after ``polls`` status polls (int, or {mount: int}). ``running`` mounts start out
+    running (started elsewhere), ``finished`` ones start out finished. ``start_results`` overrides
+    start_scrub() per mount. ``interrupt_on_sleep`` raises KeyboardInterrupt on that sleep (1-based).
+    """
+
+    def __init__(self, mounts, polls=2, running=(), finished=(), errors=(), start_results=None,
+                 clock=1_000_000.0, interrupt_on_sleep=None):
+        self.mounts = list(mounts)
+        self.polls = polls
+        self.state = {m: "never" for m in self.mounts}
+        self.remaining = {}
+        for m in running:
+            self._run(m)
+        for m in finished:
+            self.state[m] = "finished"
+        self.errors = set(errors)
+        self.start_results = dict(start_results or {})
+        self.clock = clock
+        self.interrupt_on_sleep = interrupt_on_sleep
+        self.sleeps = 0
+        self.started = []    # (mount, clock)
+        self.cancelled = []
+        self.status_polls = 0
+
+    def _run(self, mount):
+        self.state[mount] = "running"
+        self.remaining[mount] = self.polls[mount] if isinstance(self.polls, dict) else self.polls
+
+    # --- patched functions ---
+    def start_scrub(self, mount):
+        self.started.append((mount, self.clock))
+        if mount in self.start_results:
+            return self.start_results[mount]
+        if self.state[mount] == "running":
+            return "running", "ERROR: Scrub is already running."
+        self._run(mount)
+        return "started", f"scrub started on {mount}"
+
+    def execute_command(self, command, wait=True):
+        if command[:3] == ["btrfs", "scrub", "cancel"]:
+            self.cancelled.append(command[3])
+            self.state[command[3]] = "aborted"
+            return ["scrub cancelled"]
+        return self.execute_commands([command])[0]
+
+    def execute_commands(self, commands, wait=True):
+        out = [self._answer(c) for c in commands]
+        if any(c[:3] == ["btrfs", "scrub", "status"] for c in commands):
+            self.status_polls += 1
+            for m in [m for m, s in self.state.items() if s == "running"]:
+                self.remaining[m] -= 1
+                if self.remaining[m] <= 0:
+                    self.state[m] = "finished"
+        return out
+
+    def _answer(self, command):
+        mount = command[-1]
+        if command[:3] == ["btrfs", "filesystem", "show"]:
+            return make_show(uuid_for(self.mounts.index(mount) + 1))
+        if command[:3] == ["btrfs", "device", "stats"]:
+            return list(STATS_ZERO)
+        if command[:3] == ["btrfs", "scrub", "status"]:
+            state = self.state[mount]
+            if state == "running":
+                return list(SCRUB_RUNNING)
+            if state == "finished":
+                return list(SCRUB_FINISHED_ERRORS if mount in self.errors else SCRUB_FINISHED_OK)
+            if state == "aborted":
+                return [line.replace("finished", "aborted") for line in SCRUB_FINISHED_OK]
+            return list(SCRUB_NEVER)
+        return []
+
+    def time(self):
+        return self.clock
+
+    def sleep(self, seconds):
+        self.sleeps += 1
+        if self.sleeps == self.interrupt_on_sleep:
+            raise KeyboardInterrupt
+        self.clock += seconds
+
+    def install(self, monkeypatch, module):
+        install_mounts(monkeypatch, module, [f"/dev/sdx {m} btrfs rw 0 0" for m in self.mounts])
+        monkeypatch.setattr(module, "start_scrub", self.start_scrub)
+        monkeypatch.setattr(module, "execute_command", self.execute_command)
+        monkeypatch.setattr(module, "execute_commands", self.execute_commands)
+        monkeypatch.setattr(module.time, "time", self.time)
+        monkeypatch.setattr(module.time, "sleep", self.sleep)
+        monkeypatch.setattr(module.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")
+        return self

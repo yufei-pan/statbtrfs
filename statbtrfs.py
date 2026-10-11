@@ -9,6 +9,8 @@ import fnmatch
 import re
 import shutil
 import subprocess
+import tempfile
+from collections import namedtuple
 from datetime import datetime
 try:
 	import multiCMD  # type: ignore
@@ -115,6 +117,7 @@ print = functools.partial(print, flush=True)
 EXIT_OK = 0        # healthy
 EXIT_PROBLEMS = 1  # device errors, scrub errors or missing devices found
 EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, no root
+EXIT_INTERRUPTED = 130  # Ctrl-C during -s
 
 # Colors (set_color(False) blanks them)
 _ANSI_COLORS = ("\033[91m", "\033[92m", "\033[93m", "\033[0m")
@@ -445,11 +448,14 @@ def poll_filesystems(filesystems):
 TABLE_HEADER = ["Mount", "Path", "FS Used", "w_err", "r_err", "f_err", "bit_rot", "gen_err",
                 "scrub_status", "scrub_time", "scrub_rate", "scrubbed_data", "error_summary"]
 
-def build_status(polled):
-    """From poll_filesystems() output: (rows, running filesystems, problems found, failures, notes).
+Status = namedtuple('Status', 'rows running problems failures notes scrubs')
 
-    problems: device errors, scrub errors or missing devices. failures: filesystems that couldn't be read."""
+def build_status(polled):
+    """Status of poll_filesystems() output: table rows, running filesystems, whether problems
+    (device errors, scrub errors, missing devices) or failures (unreadable filesystems) were seen,
+    notes to show with the table, and the parsed scrub status per first mountpoint."""
     rows, running, notes = [], [], []
+    scrubs = {}
     problems = failures = False
     for fs, filesystem_show, device_stats, scrub_output in polled:
         uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
@@ -459,6 +465,7 @@ def build_status(polled):
             continue
         err_dict = parse_device_stats(device_stats)
         scrub_data = parse_scrub_status(scrub_output)
+        scrubs[fs['mounts'][0]] = scrub_data
         if scrub_data["scrub_status"] == "running":
             running.append(fs)
         if missing or any(err_dict.values()) or scrub_data["has_errors"]:
@@ -478,7 +485,7 @@ def build_status(polled):
             scrub_data["scrubbed_data"],
             scrub_data["error_summary"]
         ])
-    return rows, running, problems, failures, notes
+    return Status(rows, running, problems, failures, notes, scrubs)
 
 def exit_code(problems, failures):
     # A health problem matters more than a filesystem we couldn't read.
@@ -486,18 +493,138 @@ def exit_code(problems, failures):
         return EXIT_PROBLEMS
     return EXIT_FAILURE if failures else EXIT_OK
 
-def issue_scrub_command(mounts):
-    # print(f"{YELLOW}Issuing scrub on {mount}{RESET}")
-    # execute_command(['bash','-c',f"btrfs scrub start {mount}"],wait=False)
-    # limit the number of mounts to scrub to max_scrub_count
-    scrubed_mounts = []
-    for mount in mounts:
-        print(f"{YELLOW}Issuing scrub on {mount}{RESET}")
-        execute_command(['btrfs','scrub','start',mount],wait=False)
-        #multiCMD.run_command(['btrfs','scrub','start',mount],quiet=True)
-        scrubed_mounts.append(mount)
-        yield scrubed_mounts
-    return scrubed_mounts
+def run_detached(command):
+    """Run command in a session of its own; return (returncode, output) as soon as it exits.
+
+    `btrfs scrub start` forks the scrub into a background process that keeps our stdout open and
+    cancels the scrub on SIGINT. So the output goes to a file (reading a pipe to EOF would wait
+    for the whole scrub), and the new session keeps the terminal's Ctrl-C and hangup away from it."""
+    if USE_SUDO:
+        command = ['sudo'] + command
+    with tempfile.TemporaryFile() as output:
+        try:
+            returncode = subprocess.call(command, stdin=subprocess.DEVNULL, stdout=output,
+                                         stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError as e:
+            return 127, str(e)
+        output.seek(0)
+        return returncode, output.read().decode('utf-8', 'replace').strip()
+
+def start_scrub(mount):
+    """Start a background scrub: ('started' | 'running' | 'failed', message).
+
+    'running' means a scrub was already running on the filesystem (started elsewhere)."""
+    returncode, output = run_detached(['btrfs', 'scrub', 'start', mount])
+    if returncode == 0:
+        return 'started', output
+    if 'already running' in output.lower():
+        return 'running', output
+    return 'failed', output.splitlines()[0] if output else f'exit code {returncode}'
+
+def cancel_scrub(mount):
+    execute_command(['btrfs', 'scrub', 'cancel', mount])
+
+def describe_scrub(scrub_data):
+    if scrub_data is None:
+        return "status unknown"
+    if scrub_data["error_summary"] == "N/A":
+        return scrub_data["scrub_status"]
+    return f"{scrub_data['scrub_status']}, {scrub_data['error_summary']}"
+
+def scrub_filesystems(filesystems, args, screen):
+    """-s: start scrubs in mountpoint order, keeping at most -m running, until every filesystem
+    has been scrubbed. Prints a per-filesystem summary and returns the exit code."""
+    max_running = args.max_scrub_count if args.max_scrub_count >= 1 else os.cpu_count()
+    queue = list(filesystems)
+    started = []      # mounts this run started
+    adopted = []      # mounts that were already running when we tried
+    failed = {}       # mount -> why the start failed
+    unconfirmed = set()  # started since the last poll, not seen running yet
+    running = set()
+    last_start = None
+    status = None
+
+    def start_next():
+        nonlocal last_start
+        while queue:
+            mount = queue.pop(0)['mounts'][0]
+            state, message = start_scrub(mount)
+            if state == 'failed':
+                failed[mount] = message
+                screen.event(f"{RED}Could not start scrub on {mount}: {message}{RESET}")
+                continue
+            if state == 'started':
+                started.append(mount)
+                unconfirmed.add(mount)
+                screen.event(f"{YELLOW}Started scrub on {mount}{RESET}")
+            else:
+                adopted.append(mount)
+                screen.event(f"{YELLOW}Scrub already running on {mount}; counting it as running{RESET}")
+            last_start = time.time()
+            return
+
+    try:
+        for _ in range(min(max_running, len(queue))):
+            start_next()
+        time.sleep(args.interval)
+        while True:
+            status = build_status(poll_filesystems(filesystems))
+            running = {fs['mounts'][0] for fs in status.running}
+            unconfirmed.clear()
+            screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
+            # A scrub just started may not show as running yet: wait out the lockout before trusting the count.
+            locked = last_start is not None and time.time() - last_start <= args.scrub_command_lockout
+            if queue and len(running) < max_running and not locked:
+                start_next()
+            elif not queue and not running and not locked:
+                break
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        return scrub_interrupted(started, adopted, running | unconfirmed, queue)
+
+    if failed:
+        print(f"{RED}Scrubs finished; {len(failed)} could not be started.{RESET}")
+    else:
+        print(f"{GREEN}All scrubs finished.{RESET}")
+    for fs in filesystems:
+        mount = fs['mounts'][0]
+        if mount in failed:
+            print(f"  {mount}: {RED}failed to start: {failed[mount]}{RESET}")
+        else:
+            prefix = "was already running; " if mount in adopted else ""
+            print(f"  {mount}: {prefix}{describe_scrub(status.scrubs.get(mount))}")
+    return exit_code(status.problems, status.failures or bool(failed))
+
+def scrub_interrupted(started, adopted, running, queue):
+    """Ctrl-C during -s. Scrubs keep running (they run in their own session) unless the user,
+    asked on a terminal, cancels the ones this run started."""
+    ours = [mount for mount in started if mount in running]
+    elsewhere = [mount for mount in adopted if mount in running]
+    print()
+    print(f"{YELLOW}Interrupted.{RESET}")
+    if ours:
+        print(f"Still running (started by this run): {', '.join(ours)}")
+    if elsewhere:
+        print(f"Still running (started elsewhere): {', '.join(elsewhere)}")
+    if queue:
+        print(f"Never started: {', '.join(fs['mounts'][0] for fs in queue)}")
+    if ours and sys.stdin.isatty() and sys.stdout.isatty():
+        noun = "scrub" if len(ours) == 1 else "scrubs"
+        try:
+            answer = input(f"Cancel {len(ours)} running {noun} started by this run? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            answer = ""
+        if answer.strip().lower() in ("y", "yes"):
+            for mount in ours:
+                cancel_scrub(mount)
+                print(f"Cancelled scrub on {mount}")
+            print("A cancelled scrub keeps its progress: continue it with `btrfs scrub resume <mount>`.")
+            return EXIT_INTERRUPTED
+    if ours or elsewhere:
+        print("Scrubs keep running in the background. Stop one with `btrfs scrub cancel <mount>`; "
+              "continue a cancelled one with `btrfs scrub resume <mount>`.")
+    return EXIT_INTERRUPTED
 
 
 def main():
@@ -545,39 +672,12 @@ def main():
               f"{args.exclude_recent_scrubbed_days}d; nothing to do.{RESET}")
         return EXIT_OK
 
-    # If the scrub flag is enabled, issue the scrub command to all mounts
     if args.scrub:
-        if args.max_scrub_count < 1:
-            scrub_count = os.cpu_count()
-        else:
-            scrub_count = args.max_scrub_count
-        if scrub_count > len(filesystems):
-            scrub_count = len(filesystems)
-        scrubber = issue_scrub_command([fs['mounts'][0] for fs in filesystems])
-        for _ in range(scrub_count):
-            scrubed_mounts = next(scrubber)
-        screen.event(f'Issued scrub to {GREEN}{scrubed_mounts}{RESET} mounts')
-        scrub_start_time = time.time()
-        time.sleep(args.interval)
+        return scrub_filesystems(filesystems, args, screen)
 
-    while True:
-        rows, running_scrubs, problems, failures, notes = build_status(poll_filesystems(filesystems))
-        screen.show(multiCMD.pretty_format_table(rows, header=TABLE_HEADER), notes)
-
-        if not args.scrub:
-            break
-        # issue scrub command to next mount if there are less than max_scrub_count scrubs running
-        if len(running_scrubs) < scrub_count and time.time() - scrub_start_time > args.scrub_command_lockout and len(scrubed_mounts) < len(filesystems):
-            scrubed_mounts = next(scrubber)
-            screen.event(f"{GREEN}Scrubed issued to {scrubed_mounts}.{RESET}")
-            scrub_start_time = time.time()
-
-        if len(running_scrubs) == 0 and time.time() - scrub_start_time > args.scrub_command_lockout:
-            print(f"{GREEN}All Scrubs finished.{RESET}")
-            break
-
-        time.sleep(args.interval)
-    return exit_code(problems, failures)
+    status = build_status(poll_filesystems(filesystems))
+    screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
+    return exit_code(status.problems, status.failures)
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -168,6 +168,7 @@ def test_screen_redraw_keeps_only_the_last_messages(capsys):
 
 def _scrub_run(monkeypatch, capsys, is_tty):
     install_status(monkeypatch, statbtrfs, {"/mnt/a": HEALTHY})
+    monkeypatch.setattr(statbtrfs, "start_scrub", lambda mount: ("started", ""))
     clock = {"now": 1_000_000.0}
     monkeypatch.setattr(statbtrfs.time, "time", lambda: clock["now"])
     monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: clock.__setitem__("now", clock["now"] + s))

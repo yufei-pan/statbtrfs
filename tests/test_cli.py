@@ -141,14 +141,15 @@ def test_main_lists_each_filesystem_once(monkeypatch):
 
 
 def test_main_scrub_starts_once_per_filesystem(monkeypatch):
-    cm = install_command_map(monkeypatch, _subvol_status_map(monkeypatch), statbtrfs)
+    install_command_map(monkeypatch, _subvol_status_map(monkeypatch), statbtrfs)
+    starts = []
+    monkeypatch.setattr(statbtrfs, "start_scrub", lambda mount: starts.append(mount) or ("started", ""))
     clock = {"now": 1_000_000.0}
     monkeypatch.setattr(statbtrfs.time, "time", lambda: clock["now"])
     monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: clock.__setitem__("now", clock["now"] + s))
     monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs", "-s", "--scrub_command_lockout", "0", "-i", "1"])
     statbtrfs.main()
-    starts = [c[1][3] for c in cm.calls if c[0] == "cmd" and c[1][:3] == ["btrfs", "scrub", "start"]]
     assert starts == ["/", "/mnt/pool"]
 
 

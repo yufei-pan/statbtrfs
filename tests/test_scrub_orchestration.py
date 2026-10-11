@@ -1,203 +1,214 @@
+"""-s orchestration (#7): starting scrubs, -m / lockout, failures, summary and Ctrl-C."""
+import os
+import signal
+import sys
+import time
+
 import pytest
 
 import statbtrfs
-from fakes import (
-    SCRUB_FINISHED_OK,
-    SCRUB_NEVER,
-    SCRUB_RUNNING,
-    SHOW_SINGLE,
-    STATS_ZERO,
-    CommandMap,
-    make_show,
-    uuid_for,
-    install_command_map,
-    install_mounts,
+from fakes import FakeBtrfs
+
+# The unguarded function (conftest wraps statbtrfs.run_detached to block real btrfs commands).
+run_detached = statbtrfs.run_detached
+
+
+def _run(monkeypatch, argv):
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"] + argv)
+    return statbtrfs.main()
+
+
+# --- run_detached / start_scrub -------------------------------------------------
+
+def test_run_detached_does_not_wait_for_background_children(monkeypatch):
+    # Like `btrfs scrub start`: the command exits, a forked child keeps its stdout open.
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
+    script = (
+        "import subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "print('child', child.pid)\n"
+        "sys.exit(3)\n"
+    )
+    t0 = time.monotonic()
+    code, output = run_detached([sys.executable, "-c", script])
+    elapsed = time.monotonic() - t0
+    os.kill(int(output.split()[1]), signal.SIGKILL)
+    assert code == 3
+    assert output.startswith("child ")
+    assert elapsed < 10
+
+
+def test_run_detached_uses_a_new_session(monkeypatch):
+    # Keeps the terminal's Ctrl-C (SIGINT cancels a btrfs scrub) and hangup away from it.
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
+    code, output = run_detached([sys.executable, "-c", "import os; print(os.getsid(0))"])
+    assert code == 0
+    assert int(output) != os.getsid(0)
+
+
+def test_run_detached_missing_command(monkeypatch):
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
+    code, output = run_detached(["/nonexistent/btrfs"])
+    assert code == 127
+    assert output
+
+
+def test_run_detached_prefixes_sudo_in_per_command_mode(monkeypatch):
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
+    seen = []
+    monkeypatch.setattr(statbtrfs.subprocess, "call", lambda cmd, **kw: seen.append((cmd, kw)) or 0)
+    run_detached(["btrfs", "scrub", "start", "/mnt/a"])
+    assert seen[0][0] == ["sudo", "btrfs", "scrub", "start", "/mnt/a"]
+    assert seen[0][1]["start_new_session"] is True
+
+
+@pytest.mark.parametrize(
+    "code,output,expected",
+    [
+        (0, "scrub started on /mnt/a, fsid x (pid=1)", ("started", "scrub started on /mnt/a, fsid x (pid=1)")),
+        (1, "ERROR: Scrub is already running.\nTo cancel use 'btrfs scrub cancel /mnt/a'.", "running"),
+        (1, "ERROR: scrub already running", "running"),
+        (1, "ERROR: cannot access '/mnt/a': Read-only file system\nmore", ("failed", "ERROR: cannot access '/mnt/a': Read-only file system")),
+        (1, "", ("failed", "exit code 1")),
+    ],
 )
+def test_start_scrub_classifies_results(monkeypatch, code, output, expected):
+    monkeypatch.setattr(statbtrfs, "run_detached", lambda cmd: (code, output))
+    state, message = statbtrfs.start_scrub("/mnt/a")
+    if isinstance(expected, tuple):
+        assert (state, message) == expected
+    else:
+        assert state == expected
 
 
-def test_issue_scrub_command_yields_cumulative_and_starts(monkeypatch):
-    cm = CommandMap(default=[])
-    install_command_map(monkeypatch, cm, statbtrfs)
-    mounts = ["/mnt/a", "/mnt/b"]
-    gen = statbtrfs.issue_scrub_command(mounts)
-    assert next(gen) == ["/mnt/a"]
-    assert next(gen) == ["/mnt/a", "/mnt/b"]
-    starts = [c for c in cm.calls if c[0] == "cmd" and c[1][:3] == ["btrfs", "scrub", "start"]]
-    assert [c[1][3] for c in starts] == ["/mnt/a", "/mnt/b"]
-    assert all(c[2] is False for c in starts)  # wait=False
+# --- orchestration ---------------------------------------------------------------
+
+def test_first_wave_respects_max_and_refill_waits_for_lockout(monkeypatch, capsys):
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b", "/mnt/c"], polls={"/mnt/a": 1, "/mnt/b": 6, "/mnt/c": 2}).install(monkeypatch, statbtrfs)
+    t0 = fake.clock
+    code = _run(monkeypatch, ["-s", "-m", "2", "--scrub_command_lockout", "2", "-i", "1"])
+    assert [m for m, _ in fake.started] == ["/mnt/a", "/mnt/b", "/mnt/c"]
+    assert fake.started[0][1] == fake.started[1][1] == t0  # first wave at once, capped at -m
+    # /mnt/a finished on the first poll (t0+1), freeing a slot, but the lockout holds /mnt/c back.
+    assert fake.started[2][1] - t0 > 2
+    assert code == statbtrfs.EXIT_OK
+    assert "All scrubs finished." in capsys.readouterr().out
 
 
-def test_main_scrub_first_wave_respects_max_count(monkeypatch, capsys):
-    mounts = ["/mnt/a", "/mnt/b", "/data"]
-    # mount output order is not set order; provide all three lines
-    mount_lines = [
-        "/dev/sda1 on /mnt/a type btrfs (rw)",
-        "/dev/sdb1 on /mnt/b type btrfs (rw)",
-        "/dev/sdc1 on /data type btrfs (rw)",
-    ]
+def test_max_zero_means_cpu_count(monkeypatch):
+    monkeypatch.setattr(statbtrfs.os, "cpu_count", lambda: 1)
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b"], polls=1).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-s", "-m", "0", "--scrub_command_lockout", "0", "-i", "1"])
+    assert fake.started[1][1] > fake.started[0][1]
 
-    # lockout=2 + interval=1 → ≥1 status poll with room under max before lockout elapses
-    lockout = 2
-    interval = 1
-    clock = {"now": 1_000_000.0}
-    mount_status = {}  # only started mounts appear; unstarted → Never
-    started = []
-    start_clocks = []
-    sleep_snapshots = []  # (now, len(started)) taken at each sleep entry
-    state = {"status_in_round": 0, "round": 0}
 
-    def fake_time():
-        return clock["now"]
-
-    def fake_sleep(seconds):
-        sleep_snapshots.append((clock["now"], len(started)))
-        clock["now"] += seconds
-
-    def lookup(command, wait=True):
-        cmd = tuple(command)
-        if cmd[:3] == ("btrfs", "scrub", "start"):
-            return []
-        if cmd[:3] == ("btrfs", "filesystem", "show"):
-            return make_show(uuid_for(sum(map(ord, cmd[3]))))
-        if cmd[:3] == ("btrfs", "device", "stats"):
-            return list(STATS_ZERO)
-        if cmd[:3] == ("btrfs", "scrub", "status"):
-            mount = cmd[3]
-            # Start of each table round (one status call per mount)
-            if state["status_in_round"] == 0:
-                state["round"] += 1
-                if state["round"] == 1 and started:
-                    # Free a slot under -m while one scrub still running (lockout must still block)
-                    mount_status[started[0]] = "finished"
-                if len(started) == 3:
-                    # After wave-2 start, finish everyone so the exit path can fire
-                    for m in list(mount_status):
-                        mount_status[m] = "finished"
-            state["status_in_round"] = (state["status_in_round"] + 1) % len(mounts)
-
-            status = mount_status.get(mount)
-            if status == "running":
-                return list(SCRUB_RUNNING)
-            if status == "finished":
-                return list(SCRUB_FINISHED_OK)
-            return list(SCRUB_NEVER)
-        return []
-
-    def execute_command(command, wait=True):
-        if tuple(command)[:3] == ("btrfs", "scrub", "start"):
-            mount = command[3]
-            started.append(mount)
-            start_clocks.append(clock["now"])
-            mount_status[mount] = "running"
-        return lookup(command, wait=wait)
-
-    def execute_commands(commands, wait=True):
-        return [lookup(c, wait=wait) for c in commands]
-
-    monkeypatch.setattr(statbtrfs, "execute_command", execute_command)
-    monkeypatch.setattr(statbtrfs, "execute_commands", execute_commands)
-    monkeypatch.setattr(statbtrfs.time, "time", fake_time)
-    monkeypatch.setattr(statbtrfs.time, "sleep", fake_sleep)
-    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")
-    monkeypatch.setattr(
-        statbtrfs.sys,
-        "argv",
-        [
-            "statbtrfs",
-            "-s",
-            "-m",
-            "2",
-            "--scrub_command_lockout",
-            str(lockout),
-            "-i",
-            str(interval),
-        ],
-    )
-
-    # Force deterministic iteration order for the set of mounts by patching find_btrfs_mounts
-    monkeypatch.setattr(statbtrfs, "find_btrfs_mounts", lambda patterns: set(mounts))
-    # And make issue_scrub_command iterate a stable list:
-    real_issue = statbtrfs.issue_scrub_command
-
-    def stable_issue(ms):
-        return real_issue(sorted(ms))
-
-    monkeypatch.setattr(statbtrfs, "issue_scrub_command", stable_issue)
-
-    statbtrfs.main()
+def test_failed_start_is_reported_and_the_rest_continue(monkeypatch, capsys):
+    fake = FakeBtrfs(
+        ["/mnt/a", "/mnt/b"], polls=1,
+        start_results={"/mnt/a": ("failed", "ERROR: Read-only file system")},
+    ).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-m", "1", "--scrub_command_lockout", "0", "-i", "1"])
     out = capsys.readouterr().out
-    assert "All Scrubs finished." in out
-
-    wave_start = start_clocks[0]
-    assert start_clocks[0] == start_clocks[1]
-    assert started[:2] == sorted(mounts)[:2]
-    assert started[2] == sorted(mounts)[2]
-
-    # First sleep is immediately after wave 1 — concurrency cap holds
-    assert sleep_snapshots[0] == (wave_start, 2)
-
-    # Mid-loop: room under max (one finished, one running) but lockout not elapsed → still 2 starts
-    pre_third_after_poll = [
-        (now, n) for now, n in sleep_snapshots[1:] if n == 2
-    ]
-    assert pre_third_after_poll, "expected ≥1 poll sleep with room under -m before wave 2"
-    assert all(n == 2 for _, n in pre_third_after_poll)
-    assert all(now - wave_start <= lockout for now, _ in pre_third_after_poll)
-
-    # Third start only after lockout gate (not merely "eventually 3")
-    assert len(started) == 3
-    assert start_clocks[2] - wave_start > lockout
+    assert [m for m, _ in fake.started] == ["/mnt/a", "/mnt/b"]
+    assert fake.started[0][1] == fake.started[1][1]  # a failure doesn't use up the slot
+    assert "Could not start scrub on /mnt/a: ERROR: Read-only file system" in out
+    assert "All scrubs finished." not in out
+    assert "/mnt/a: failed to start: ERROR: Read-only file system" in out
+    assert code == statbtrfs.EXIT_FAILURE
 
 
-def test_main_scrub_exclude_recent_never_starts_skipped(monkeypatch, capsys):
-    # /mnt/new finished recently -> skipped by -d 7
-    # /mnt/old never scrubbed -> kept and started
+def test_nothing_started_does_not_claim_success(monkeypatch, capsys):
+    FakeBtrfs(["/mnt/a"], start_results={"/mnt/a": ("failed", "boom")}).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "10", "-i", "1"])
+    out = capsys.readouterr().out
+    assert "All scrubs finished." not in out
+    assert code == statbtrfs.EXIT_FAILURE
+
+
+def test_already_running_scrub_is_adopted_and_counts_toward_max(monkeypatch, capsys):
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b"], polls=3, running=["/mnt/a"]).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-m", "1", "--scrub_command_lockout", "0", "-i", "1"])
+    out = capsys.readouterr().out
+    assert "already running on /mnt/a" in out
+    # /mnt/b waits until the adopted scrub on /mnt/a is no longer running.
+    assert fake.started[1][1] > fake.started[0][1] + 1
+    assert "/mnt/a: was already running; finished, OK" in out
+    assert code == statbtrfs.EXIT_OK
+
+
+def test_summary_reports_scrub_errors(monkeypatch, capsys):
+    FakeBtrfs(["/mnt/a", "/mnt/b"], polls=1, errors=["/mnt/b"]).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"])
+    out = capsys.readouterr().out
+    assert "/mnt/a: finished, OK" in out
+    assert "/mnt/b: finished, csum=3 uncorrectable=3" in out
+    assert code == statbtrfs.EXIT_PROBLEMS
+
+
+def test_exclude_recent_never_starts_skipped(monkeypatch, capsys):
     scrub_epoch = statbtrfs.parse_scrub_time_to_epoch("Thu May  2 09:56:55 2024")
-    clock = {"now": scrub_epoch + 24 * 3600}
+    fake = FakeBtrfs(["/mnt/new", "/mnt/old"], polls=1, finished=["/mnt/new"], clock=scrub_epoch + 24 * 3600)
+    fake.install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-s", "-d", "7", "--scrub_command_lockout", "1", "-i", "1"])
+    assert [m for m, _ in fake.started] == ["/mnt/old"]
+    assert "Skipping mounts scrubbed within the last 7d: /mnt/new" in capsys.readouterr().out
 
-    monkeypatch.setattr(statbtrfs.time, "time", lambda: clock["now"])
 
-    def sleep_and_advance(s):
-        clock["now"] += max(s, 1)
+# --- Ctrl-C -------------------------------------------------------------------------
 
-    monkeypatch.setattr(statbtrfs.time, "sleep", sleep_and_advance)
+def _interactive(monkeypatch, answer):
+    monkeypatch.setattr(statbtrfs.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(statbtrfs.sys.stdout, "isatty", lambda: True, raising=False)
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or answer)
+    return prompts
 
-    started = []
 
-    def execute_command(command, wait=True):
-        cmd = tuple(command)
-        if cmd[:3] == ("btrfs", "scrub", "status"):
-            mount = cmd[3]
-            if mount == "/mnt/new":
-                return list(SCRUB_FINISHED_OK)
-            return list(SCRUB_NEVER)
-        if cmd[:3] == ("btrfs", "scrub", "start"):
-            started.append(cmd[3])
-            return []
-        if cmd[:3] == ("btrfs", "filesystem", "show"):
-            return make_show(uuid_for(sum(map(ord, cmd[3]))))
-        if cmd[:3] == ("btrfs", "device", "stats"):
-            return list(STATS_ZERO)
-        return []
+def _interrupted_run(monkeypatch):
+    # /mnt/c runs elsewhere; /mnt/a and /mnt/b are started by us; /mnt/d is still queued at ^C.
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b", "/mnt/c", "/mnt/d"], polls=50, running=["/mnt/c"], interrupt_on_sleep=3)
+    fake.install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-m", "3", "--scrub_command_lockout", "0", "-i", "1"])
+    return fake, code
 
-    def execute_commands(commands, wait=True):
-        return [execute_command(c, wait=wait) for c in commands]
 
-    install_mounts(monkeypatch, statbtrfs, [
-        "/dev/sda1 /mnt/old btrfs rw 0 0",
-        "/dev/sdb1 /mnt/new btrfs rw 0 0",
-    ])
-    monkeypatch.setattr(statbtrfs, "execute_command", execute_command)
-    monkeypatch.setattr(statbtrfs, "execute_commands", execute_commands)
-    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")
-    monkeypatch.setattr(
-        statbtrfs.sys,
-        "argv",
-        ["statbtrfs", "-s", "-d", "7", "-m", "8", "--scrub_command_lockout", "1", "-i", "1"],
-    )
+def test_ctrl_c_without_terminal_leaves_scrubs_running(monkeypatch, capsys):
+    monkeypatch.setattr(statbtrfs.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("must not prompt without a terminal"))
+    fake, code = _interrupted_run(monkeypatch)
+    out = capsys.readouterr().out
+    assert code == statbtrfs.EXIT_INTERRUPTED == 130
+    assert fake.cancelled == []
+    assert "Still running (started by this run): /mnt/a, /mnt/b" in out
+    assert "Still running (started elsewhere): /mnt/c" in out
+    assert "Never started: /mnt/d" in out
+    assert "btrfs scrub cancel" in out and "btrfs scrub resume" in out
 
-    # Import SCRUB_NEVER at module top with the other fakes.
-    statbtrfs.main()
-    assert started == ["/mnt/old"]
-    assert "/mnt/new" not in started
-    assert "Skipping mounts scrubbed within the last 7d" in capsys.readouterr().out
+
+def test_ctrl_c_on_terminal_asks_and_cancels_only_our_scrubs(monkeypatch, capsys):
+    prompts = _interactive(monkeypatch, "y")
+    fake, code = _interrupted_run(monkeypatch)
+    assert prompts == ["Cancel 2 running scrubs started by this run? [y/N] "]
+    assert fake.cancelled == ["/mnt/a", "/mnt/b"]
+    assert "Cancelled scrub on /mnt/a" in capsys.readouterr().out
+    assert code == statbtrfs.EXIT_INTERRUPTED
+
+
+@pytest.mark.parametrize("answer", ["", "n", "no", "anything"])
+def test_ctrl_c_on_terminal_defaults_to_keep_running(monkeypatch, capsys, answer):
+    _interactive(monkeypatch, answer)
+    fake, code = _interrupted_run(monkeypatch)
+    assert fake.cancelled == []
+    assert "btrfs scrub cancel" in capsys.readouterr().out
+
+
+def test_ctrl_c_at_the_prompt_keeps_scrubs_running(monkeypatch):
+    _interactive(monkeypatch, None)
+
+    def raise_interrupt(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", raise_interrupt)
+    fake, code = _interrupted_run(monkeypatch)
+    assert fake.cancelled == []
+    assert code == statbtrfs.EXIT_INTERRUPTED

@@ -19,6 +19,23 @@ def _assume_root(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _never_start_real_scrubs(monkeypatch):
+    """-s tests must fake start_scrub(); never let one reach a real `btrfs scrub start`."""
+    import statbtrfs
+
+    real = getattr(statbtrfs, "run_detached", None)
+    if real is None:
+        return
+
+    def guarded(command):
+        if "btrfs" in command:
+            pytest.fail(f"test tried to run {command}: fake statbtrfs.start_scrub")
+        return real(command)
+
+    monkeypatch.setattr(statbtrfs, "run_detached", guarded)
+
+
+@pytest.fixture(autouse=True)
 def _restore_colors():
     """main() switches colours off when stdout is not a terminal (as under pytest)."""
     import statbtrfs
