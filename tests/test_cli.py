@@ -11,12 +11,14 @@ from fakes import (
     STATS_ZERO,
     CommandMap,
     install_command_map,
+    install_mounts,
 )
 
 
-def _status_map_for_mounts(mount_lines, mounts_show_stats_scrub):
-    """Build CommandMap for mount + per-mount show/stats/scrub triples."""
-    mapping = {("mount", "-t", "btrfs"): mount_lines}
+def _status_map_for_mounts(monkeypatch, mount_lines, mounts_show_stats_scrub):
+    """Install mount lines and build a CommandMap of per-mount show/stats/scrub triples."""
+    install_mounts(monkeypatch, statbtrfs, mount_lines)
+    mapping = {}
     # execute_commands looks up each subcommand individually via _lookup
     for mount, (show, stats, scrub) in mounts_show_stats_scrub.items():
         mapping[("btrfs", "filesystem", "show", mount)] = show
@@ -28,6 +30,7 @@ def _status_map_for_mounts(mount_lines, mounts_show_stats_scrub):
 def test_main_no_mounts_message(monkeypatch, capsys):
     cm = CommandMap(default=[])
     install_command_map(monkeypatch, cm, statbtrfs)
+    install_mounts(monkeypatch, statbtrfs, [])
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
     statbtrfs.main()
     assert "No Btrfs mounts found." in capsys.readouterr().out
@@ -35,6 +38,7 @@ def test_main_no_mounts_message(monkeypatch, capsys):
 
 def test_main_status_prints_table_once(monkeypatch, capsys):
     cm = _status_map_for_mounts(
+        monkeypatch,
         MOUNT_LINES_SINGLE,
         {"/mnt/a": (SHOW_SINGLE, STATS_ZERO, SCRUB_FINISHED_OK)},
     )
@@ -51,6 +55,7 @@ def test_main_status_prints_table_once(monkeypatch, capsys):
 
 def test_main_pattern_filters_mounts(monkeypatch, capsys):
     cm = _status_map_for_mounts(
+        monkeypatch,
         MOUNT_LINES_MULTI,
         {
             "/data": (SHOW_SINGLE, STATS_ZERO, SCRUB_FINISHED_OK),
@@ -65,6 +70,7 @@ def test_main_pattern_filters_mounts(monkeypatch, capsys):
 
 def test_main_table_shows_errors_from_every_device(monkeypatch, capsys):
     cm = _status_map_for_mounts(
+        monkeypatch,
         MOUNT_LINES_SINGLE,
         {"/mnt/a": (SHOW_MULTI_DEVICE, STATS_MULTI_DEVICE, SCRUB_FINISHED_OK)},
     )
@@ -98,8 +104,8 @@ def test_main_exclude_recent_prints_skip(monkeypatch, capsys):
     scrub_epoch = statbtrfs.parse_scrub_time_to_epoch("Thu May  2 09:56:55 2024")
     monkeypatch.setattr(statbtrfs.time, "time", lambda: scrub_epoch + 24 * 3600)
 
+    install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_SINGLE)
     mapping = {
-        ("mount", "-t", "btrfs"): MOUNT_LINES_SINGLE,
         ("btrfs", "scrub", "status", "/mnt/a"): list(SCRUB_FINISHED_OK),
     }
     cm = CommandMap(mapping=mapping, default=[])

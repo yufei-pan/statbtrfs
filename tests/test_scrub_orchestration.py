@@ -9,6 +9,7 @@ from fakes import (
     STATS_ZERO,
     CommandMap,
     install_command_map,
+    install_mounts,
 )
 
 
@@ -52,8 +53,6 @@ def test_main_scrub_first_wave_respects_max_count(monkeypatch, capsys):
 
     def lookup(command, wait=True):
         cmd = tuple(command)
-        if cmd[:3] == ("mount", "-t", "btrfs"):
-            return mount_lines
         if cmd[:3] == ("btrfs", "scrub", "start"):
             return []
         if cmd[:3] == ("btrfs", "filesystem", "show"):
@@ -165,11 +164,6 @@ def test_main_scrub_exclude_recent_never_starts_skipped(monkeypatch, capsys):
 
     def execute_command(command, wait=True):
         cmd = tuple(command)
-        if cmd[:3] == ("mount", "-t", "btrfs"):
-            return [
-                "/dev/sda1 on /mnt/old type btrfs (rw)",
-                "/dev/sdb1 on /mnt/new type btrfs (rw)",
-            ]
         if cmd[:3] == ("btrfs", "scrub", "status"):
             mount = cmd[3]
             if mount == "/mnt/new":
@@ -187,6 +181,10 @@ def test_main_scrub_exclude_recent_never_starts_skipped(monkeypatch, capsys):
     def execute_commands(commands, wait=True):
         return [execute_command(c, wait=wait) for c in commands]
 
+    install_mounts(monkeypatch, statbtrfs, [
+        "/dev/sda1 /mnt/old btrfs rw 0 0",
+        "/dev/sdb1 /mnt/new btrfs rw 0 0",
+    ])
     monkeypatch.setattr(statbtrfs, "execute_command", execute_command)
     monkeypatch.setattr(statbtrfs, "execute_commands", execute_commands)
     monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")

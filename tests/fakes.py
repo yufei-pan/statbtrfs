@@ -1,11 +1,12 @@
+# /proc/self/mounts lines
 MOUNT_LINES_MULTI = [
-    "/dev/sda1 on /mnt/a type btrfs (rw,relatime)",
-    "/dev/sdb1 on /mnt/b type btrfs (rw,relatime)",
-    "/dev/sdc1 on /data type btrfs (rw,relatime)",
+    "/dev/sda1 /mnt/a btrfs rw,relatime 0 0",
+    "/dev/sdb1 /mnt/b btrfs rw,relatime 0 0",
+    "/dev/sdc1 /data btrfs rw,relatime 0 0",
 ]
 
 MOUNT_LINES_SINGLE = [
-    "/dev/sda1 on /mnt/a type btrfs (rw,relatime)",
+    "/dev/sda1 /mnt/a btrfs rw,relatime 0 0",
 ]
 
 SHOW_SINGLE = [
@@ -127,6 +128,11 @@ class CommandMap:
     def execute_commands(self, commands, wait=True):
         self.calls.append(("cmds", [list(c) for c in commands], wait))
         return [self._lookup(c) for c in commands]
+
+
+def install_mounts(monkeypatch, module, lines):
+    """Serve ``lines`` as the contents of /proc/self/mounts."""
+    monkeypatch.setattr(module, "read_proc_mounts", lambda: list(lines))
 
 
 def install_command_map(monkeypatch, command_map, module):

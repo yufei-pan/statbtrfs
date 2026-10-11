@@ -5,6 +5,7 @@ import time
 import os
 import sys
 import fnmatch
+import re
 from datetime import datetime
 try:
 	import multiCMD  # type: ignore
@@ -136,18 +137,34 @@ def execute_commands(commands,wait=True):
         commands = [['sudo']+command for command in commands]
     return multiCMD.run_commands(commands,quiet=True,wait_for_return=wait,max_threads=0)
 
+PROC_MOUNTS = '/proc/self/mounts'
+_MOUNT_ESCAPE_RX = re.compile(r'\\([0-7]{3})')
+
+def read_proc_mounts(path=PROC_MOUNTS):
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as f:
+            return f.read().splitlines()
+    except OSError as e:
+        print(f"{RED}Could not read {path}: {e}{RESET}")
+        return []
+
+def parse_proc_mounts(lines):
+    # The kernel octal-escapes space, tab, newline and backslash in mountpoints (e.g. \040).
+    mounts = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 3 and fields[2] == 'btrfs':
+            mounts.append(_MOUNT_ESCAPE_RX.sub(lambda m: chr(int(m.group(1), 8)), fields[1]))
+    return mounts
+
 def find_btrfs_mounts(filters):
-    mounts = execute_command(["mount", "-t", "btrfs"])
-    #mounts = multiCMD.run_command(["mount", "-t", "btrfs"],quiet=True)
+    mount_list = parse_proc_mounts(read_proc_mounts())
     btrfs_mounts = set()
-    if mounts:
-        if filters:
-            filters = [f'*{filter}*' for filter in filters]
-            mount_list = [line.split()[2] for line in mounts]
-            for filter in filters:
-                btrfs_mounts.update(fnmatch.filter(mount_list,filter))
-        else:
-            btrfs_mounts.update([line.split()[2] for line in mounts])
+    if filters:
+        for pattern in filters:
+            btrfs_mounts.update(fnmatch.filter(mount_list, f'*{pattern}*'))
+    else:
+        btrfs_mounts.update(mount_list)
     return btrfs_mounts
 
 def parse_show_info(info):
