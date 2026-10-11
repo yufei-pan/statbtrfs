@@ -350,18 +350,8 @@ def summarize_scrub_errors(summary, following_lines):
             parts.append(f"{match.group(1).lower()}={match.group(2)}")
     return " ".join(parts)
 
-def parse_scrub_status(output):
-    scrub_data = {}
-    lines = output
-    # if "no stats available" in output:
-    #     scrub_data = {
-    #         "scrub_status": "Never",
-    #         "scrub_time": "N/A",
-    #         "scrub_rate": "N/A",
-    #         "scrubbed_data": "N/A",
-    #         "error_summary": "N/A"
-    #     }
-    # else:
+def parse_scrub_status(lines):
+    # "no stats available" (never scrubbed) leaves these defaults.
     scrub_data = {
         "scrub_status": "Never",
         "scrub_time": "N/A",
