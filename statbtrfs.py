@@ -165,7 +165,7 @@ Bi6[miAo[KQq$2[a9<0/j]iK0fQ#$1R'<Lgm/Z=C?R/uN:oR@fH"e7B#t6R?^87"4)u/aU^k$MAAiOo<
 G$Zd5a(io)0lFG-f=*e`d4qc?'$MRgG^>L.lkl4\ll45g<NgD^*e\:H=C5XEU&7QkPtS_71g1Ubs.-K!!1DXV<J$]bF0m7Z,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.34'
+version='0.35'
 __version__ = version
 
 # -s runs for hours, often into a log: don't let output sit in a buffer.
