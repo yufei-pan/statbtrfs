@@ -5,7 +5,7 @@ setup(
     name='statbtrfs',
     version=version,
     description='Query Btrfs filesystem status',
-    long_description=open('README.txt').read(),
+    long_description=open('README.txt', encoding='utf-8').read(),
     long_description_content_type='text/plain',
     author='Yufei Pan',
     author_email='pan@zopyr.us',
@@ -17,7 +17,7 @@ setup(
         ],
     },
     install_requires=[
-        'multiCMD>=1.51',
+        'multiCMD>=1.54',
     ],
     extras_require={
         'completion': [
