@@ -165,7 +165,7 @@ F]84<Y\%^<3HdZ==VkK"?EpOWI&PLQ0QYRH^?T47jH9%,:8Z-h%h%Cg'X094q;0!,$AaHk^c@\'RbY:_
 R0ll=/-"61`@TO#lgfjEs6Y.0XWd4,Rg1dKs"$1.tN,emV';`#sL'CK7d9?(h\Geq%>+Z]Dqp3`9UO'`;@Y_!!1M[^Zbe"FZdWIZ,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.35'
+version='0.36'
 __version__ = version
 
 # -s runs for hours, often into a log: don't let output sit in a buffer.
