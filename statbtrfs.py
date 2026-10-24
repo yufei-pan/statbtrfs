@@ -322,6 +322,11 @@ def execute_commands(commands,wait=True):
         commands = [['sudo']+command for command in commands]
     return multiCMD.run_commands(commands,quiet=True,wait_for_return=wait,max_threads=MAX_PARALLEL_COMMANDS)
 
+def btrfs_not_found():
+    """Whether btrfs is missing from PATH (multiCMD's quiet=True hides its own "Command path not found"
+    line). Behind the per-command sudo fallback, sudo's own PATH decides: not checked."""
+    return not USE_SUDO and shutil.which('btrfs') is None
+
 PROC_MOUNTS = '/proc/self/mounts'
 _MOUNT_ESCAPE_RX = re.compile(r'\\([0-7]{3})')
 
@@ -797,7 +802,11 @@ def main():
     acquire_root([f"--color={'always' if use_color else 'never'}"] + sys.argv[1:])
     screen = Screen(redraw=(args.scrub or args.watch) and sys.stdout.isatty())
 
-    filesystems = select_filesystems(discover_filesystems(find_btrfs_mounts(None)), args.pattern)
+    discovered = discover_filesystems(find_btrfs_mounts(None))
+    if discovered and all(fs['uuid'] is None for fs in discovered) and btrfs_not_found():
+        print(f"{RED}btrfs not found on PATH: install btrfs-progs, or add its directory to PATH.{RESET}")
+        return EXIT_FAILURE
+    filesystems = select_filesystems(discovered, args.pattern)
     if not filesystems:
         print(f"{RED}No Btrfs mounts found.{RESET}")
         return EXIT_FAILURE

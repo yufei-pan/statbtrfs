@@ -19,6 +19,15 @@ def _assume_root(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _assume_btrfs_installed(monkeypatch):
+    """Tests fake the btrfs output; an empty fake must not make main() probe for a real btrfs
+    (GitHub's runners may not have btrfs-progs)."""
+    import statbtrfs
+
+    monkeypatch.setattr(statbtrfs, "btrfs_not_found", lambda: False, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _never_start_real_scrubs(monkeypatch):
     """-s tests must fake start_scrub(); never let one reach a real `btrfs scrub start`."""
     import statbtrfs

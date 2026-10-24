@@ -199,3 +199,39 @@ def test_main_exclude_recent_prints_skip(monkeypatch, capsys):
     assert "Skipping mounts scrubbed within the last 7d" in out
     assert "/mnt/a" in out
     assert "nothing to do" in out
+
+
+_real_btrfs_not_found = getattr(statbtrfs, "btrfs_not_found", None)  # conftest replaces it for the other tests
+
+
+def _only_path(monkeypatch, tmp_path, with_btrfs):
+    """PATH holds nothing but (optionally) a btrfs that prints nothing, whatever the host has."""
+    monkeypatch.setattr(statbtrfs, "btrfs_not_found", _real_btrfs_not_found, raising=False)
+    if with_btrfs:
+        fake = tmp_path / "btrfs"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+
+def test_main_reports_missing_btrfs_and_exits_with_failure(monkeypatch, capsys, tmp_path):
+    # multiCMD's quiet=True hides its own "Command path not found" line for return code 127.
+    _only_path(monkeypatch, tmp_path, with_btrfs=False)
+    install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_SINGLE)
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
+    assert statbtrfs.main() == statbtrfs.EXIT_FAILURE
+    out = capsys.readouterr().out
+    assert "btrfs not found on PATH: install btrfs-progs" in out
+    assert "Could not parse" not in out
+    assert "Could not fetch" not in out
+
+
+def test_main_empty_btrfs_output_with_btrfs_present_keeps_the_parse_messages(monkeypatch, capsys, tmp_path):
+    _only_path(monkeypatch, tmp_path, with_btrfs=True)
+    install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_SINGLE)
+    install_command_map(monkeypatch, CommandMap(default=[]), statbtrfs)
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
+    assert statbtrfs.main() == statbtrfs.EXIT_FAILURE
+    out = capsys.readouterr().out
+    assert "btrfs not found" not in out
+    assert "Could not fetch complete info for /mnt/a" in out
