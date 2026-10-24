@@ -226,7 +226,7 @@ n2bCdif2pWVPRTd,h$=CNfg1[FGc8LfqlH2GN/'_EX:&4bM0`fO](=4X(J@Sa??VUC#k1]=_NoANG(ji
 Uu5GZ]k0/AZJm!!0Ql!L&cOl<*I!Z,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.36'
+version='0.37'
 __version__ = version
 
 # -s runs for hours, often into a log: don't let output sit in a buffer.
