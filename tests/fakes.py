@@ -201,12 +201,12 @@ class CommandMap:
             return list(self.mapping[key])
         return list(self.default)
 
-    def execute_command(self, command, wait=True):
-        self.calls.append(("cmd", list(command), wait))
+    def execute_command(self, command):
+        self.calls.append(("cmd", list(command)))
         return self._lookup(command)
 
-    def execute_commands(self, commands, wait=True):
-        self.calls.append(("cmds", [list(c) for c in commands], wait))
+    def execute_commands(self, commands):
+        self.calls.append(("cmds", [list(c) for c in commands]))
         return [self._lookup(c) for c in commands]
 
 
@@ -277,14 +277,14 @@ class FakeBtrfs:
         self.no_stats_yet[mount] = self.stats_delay
         return "started", f"scrub started on {mount}"
 
-    def execute_command(self, command, wait=True):
+    def execute_command(self, command):
         if command[:3] == ["btrfs", "scrub", "cancel"]:
             self.cancelled.append(command[3])
             self.state[command[3]] = "aborted"
             return ["scrub cancelled"]
         return self.execute_commands([command])[0]
 
-    def execute_commands(self, commands, wait=True):
+    def execute_commands(self, commands):
         out = [self._answer(c) for c in commands]
         if any(c[:3] == ["btrfs", "scrub", "status"] for c in commands):
             self.status_polls += 1

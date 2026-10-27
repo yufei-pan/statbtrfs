@@ -234,3 +234,16 @@ def test_main_empty_btrfs_output_with_btrfs_present_keeps_the_fetch_note(monkeyp
     out = capsys.readouterr().out
     assert "btrfs not found" not in out
     assert "Could not fetch complete info for /mnt/a" in out
+
+
+def test_ctrl_c_outside_scrub_and_watch_exits_130_quietly(monkeypatch, capsys):
+    # e.g. while `btrfs filesystem show` hangs on a dead mount.
+    install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_SINGLE)
+
+    def hang(commands):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(statbtrfs, "execute_commands", hang)
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
+    assert statbtrfs.main() == statbtrfs.EXIT_INTERRUPTED == 130
+    assert "Traceback" not in capsys.readouterr().err

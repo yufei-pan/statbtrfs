@@ -30,7 +30,7 @@ def test_discover_keeps_unparseable_mounts_separate(monkeypatch):
     assert all(fs["uuid"] is None for fs in filesystems)
 
 
-def test_discover_no_mounts_runs_nothing(monkeypatch):
+def test_discover_no_mounts_finds_nothing(monkeypatch):
     _show_map(monkeypatch, {})
     assert statbtrfs.discover_filesystems([]) == []
 

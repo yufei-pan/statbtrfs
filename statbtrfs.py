@@ -758,6 +758,9 @@ def build_parser():
 def main():
     try:
         return run()
+    except KeyboardInterrupt:  # outside -s / -w, whose own handlers catch first
+        print()
+        return EXIT_INTERRUPTED
     except BrokenPipeError:
         # The reader went away (e.g. `statbtrfs | head`). Point stdout at devnull so the
         # interpreter's exit-time flush doesn't raise a second BrokenPipeError.

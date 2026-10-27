@@ -7,10 +7,10 @@ def _fs(*mounts):
 
 
 def _serve_scrub_status(monkeypatch, responses):
-    def fake_exec(command, wait=True):
+    def fake_exec(command):
         return list(responses[command[-1]])
 
-    def fake_execs(commands, wait=True):
+    def fake_execs(commands):
         return [fake_exec(c) for c in commands]
 
     monkeypatch.setattr(statbtrfs, "execute_command", fake_exec)

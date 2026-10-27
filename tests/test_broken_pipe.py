@@ -9,7 +9,7 @@ import statbtrfs
 ROOT = Path(statbtrfs.__file__).resolve().parent
 
 CHILD = """
-import sys, time
+import sys
 sys.path.insert(0, {root!r})
 import statbtrfs
 statbtrfs.read_proc_mounts = lambda: ["/dev/sdx /mnt/a btrfs rw 0 0"]
@@ -17,7 +17,6 @@ statbtrfs.execute_commands = lambda commands: [[] for _ in commands]
 statbtrfs._is_root = lambda: True
 statbtrfs.btrfs_not_found = lambda: False
 sys.argv = ["statbtrfs", "--color=never"]
-time.sleep(0.5)  # the reader has closed the pipe by now
 sys.exit(statbtrfs.main())
 """
 
