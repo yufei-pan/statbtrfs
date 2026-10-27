@@ -334,8 +334,6 @@ def discover_filesystems(mounts):
     Subvolume mounts of one filesystem share its UUID, and status and scrub are per filesystem.
     A mount whose UUID can't be read stays on its own (uuid None)."""
     mounts = list(mounts)
-    if not mounts:
-        return []
     shows = execute_commands([["btrfs", "filesystem", "show", mount] for mount in mounts])
     filesystems = []
     by_uuid = {}
@@ -366,7 +364,7 @@ _SHOW_TOTAL_RX = re.compile(r'^\s*Total devices\s+(\d+)\s+FS bytes used\s+(\S+)'
 _SHOW_DEVID_RX = re.compile(r'^\s*devid\s+\d+\s+size\s+\S+\s+used\s+\S+\s+path\s+(.+?)\s*$')
 
 def parse_show_uuid(info):
-    for line in info or []:
+    for line in info:
         if line.startswith("Label:"):
             match = _SHOW_UUID_RX.search(line)
             if match:
@@ -503,9 +501,9 @@ def filter_recently_scrubbed(filesystems, exclude_recent_days):
     kept = []
     skipped = []
 
-    outputs = execute_commands([["btrfs", "scrub", "status", fs['mounts'][0]] for fs in filesystems]) if filesystems else []
+    outputs = execute_commands([["btrfs", "scrub", "status", fs['mounts'][0]] for fs in filesystems])
     for fs, scrub_output in zip(filesystems, outputs):
-        scrub_data = parse_scrub_status(scrub_output or [])
+        scrub_data = parse_scrub_status(scrub_output)
         scrub_status = scrub_data.get("scrub_status", "").strip().lower()
         scrub_time_epoch = parse_scrub_time_to_epoch(scrub_data["scrub_time"])
 
@@ -530,7 +528,7 @@ def poll_filesystems(filesystems):
             ["btrfs", "device", "stats", mount],
             ["btrfs", "scrub", "status", mount],
         ]
-    outputs = [output or [] for output in execute_commands(commands)] if commands else []
+    outputs = execute_commands(commands)
     return [(fs, *outputs[3 * i:3 * i + 3]) for i, fs in enumerate(filesystems)]
 
 TABLE_HEADER = ["Mount", "Path", "FS Used", "w_err", "r_err", "f_err", "bit_rot", "gen_err",

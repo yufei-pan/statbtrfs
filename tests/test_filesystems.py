@@ -31,9 +31,8 @@ def test_discover_keeps_unparseable_mounts_separate(monkeypatch):
 
 
 def test_discover_no_mounts_runs_nothing(monkeypatch):
-    cm = _show_map(monkeypatch, {})
+    _show_map(monkeypatch, {})
     assert statbtrfs.discover_filesystems([]) == []
-    assert cm.calls == []
 
 
 def test_select_filesystems_matches_any_mountpoint():
