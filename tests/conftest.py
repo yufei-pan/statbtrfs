@@ -70,5 +70,5 @@ def skip_unless_live_btrfs():
         pytest.skip("live btrfs queries need root (run pytest -m live as root)")
     import statbtrfs
 
-    if not statbtrfs.find_btrfs_mounts([]):
+    if not statbtrfs.find_btrfs_mounts():
         pytest.skip("no btrfs mounts")

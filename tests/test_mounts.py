@@ -42,23 +42,15 @@ def test_find_btrfs_mounts_runs_no_commands(monkeypatch):
     cm = CommandMap(default=[])
     install_command_map(monkeypatch, cm, statbtrfs)
     install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_MULTI)
-    statbtrfs.find_btrfs_mounts([])
+    statbtrfs.find_btrfs_mounts()
     assert cm.calls == []
 
 
 def test_find_btrfs_mounts_empty(monkeypatch):
     install_mounts(monkeypatch, statbtrfs, [])
-    assert statbtrfs.find_btrfs_mounts([]) == []
-    assert statbtrfs.find_btrfs_mounts(None) == []
+    assert statbtrfs.find_btrfs_mounts() == []
 
 
 def test_find_btrfs_mounts_all(monkeypatch):
     install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_MULTI)
-    assert statbtrfs.find_btrfs_mounts([]) == ["/data", "/mnt/a", "/mnt/b"]
-
-
-def test_find_btrfs_mounts_pattern_filter(monkeypatch):
-    install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_MULTI)
-    assert statbtrfs.find_btrfs_mounts(["mnt"]) == ["/mnt/a", "/mnt/b"]
-    assert statbtrfs.find_btrfs_mounts(["data"]) == ["/data"]
-    assert statbtrfs.find_btrfs_mounts(["mnt", "a"]) == ["/data", "/mnt/a", "/mnt/b"]
+    assert statbtrfs.find_btrfs_mounts() == ["/data", "/mnt/a", "/mnt/b"]

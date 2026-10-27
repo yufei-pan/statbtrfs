@@ -324,16 +324,9 @@ def parse_proc_mounts(lines):
             mounts.append(_MOUNT_ESCAPE_RX.sub(lambda m: chr(int(m.group(1), 8)), fields[1]))
     return mounts
 
-def find_btrfs_mounts(filters):
-    """Sorted btrfs mountpoints, optionally only those matching any pattern (substring glob)."""
-    mount_list = parse_proc_mounts(read_proc_mounts())
-    btrfs_mounts = set()
-    if filters:
-        for pattern in filters:
-            btrfs_mounts.update(fnmatch.filter(mount_list, f'*{pattern}*'))
-    else:
-        btrfs_mounts.update(mount_list)
-    return sorted(btrfs_mounts)
+def find_btrfs_mounts():
+    """Sorted btrfs mountpoints."""
+    return sorted(set(parse_proc_mounts(read_proc_mounts())))
 
 def discover_filesystems(mounts):
     """Group mountpoints into filesystems by UUID: [{'uuid': str | None, 'mounts': [...]}].
@@ -779,7 +772,7 @@ def main():
     acquire_root([f"--color={'always' if use_color else 'never'}"] + sys.argv[1:])
     screen = Screen(redraw=(args.scrub or args.watch) and sys.stdout.isatty())
 
-    discovered = discover_filesystems(find_btrfs_mounts(None))
+    discovered = discover_filesystems(find_btrfs_mounts())
     if discovered and all(fs['uuid'] is None for fs in discovered) and btrfs_not_found():
         print(f"{RED}btrfs not found on PATH: install btrfs-progs, or add its directory to PATH.{RESET}")
         return EXIT_FAILURE
