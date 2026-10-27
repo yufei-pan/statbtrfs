@@ -28,8 +28,8 @@ options:
 Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); 2 the
 check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted.
 
-Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not parse
-btrfs show info" rather than "btrfs not found on PATH" (see docs/limitations.md).
+Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
+complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
 Install:
 sudo pip install statbtrfs

@@ -25,13 +25,11 @@ def test_parse_show_multi_device_paths_joined():
     assert missing == 0
 
 
-def test_parse_show_incomplete_returns_nones(capsys):
+def test_parse_show_incomplete_returns_nones():
     uuid, fs_used, device_path, missing = statbtrfs.parse_show_info(SHOW_INCOMPLETE)
     assert uuid == "11111111-2222-3333-4444-555555555555"
     assert fs_used == "1.00GiB"
     assert device_path is None
-    out = capsys.readouterr().out
-    assert "Could not parse btrfs show info" in out
 
 
 def test_parse_show_ignores_keywords_inside_label():
@@ -41,7 +39,7 @@ def test_parse_show_ignores_keywords_inside_label():
     assert device_path == "/dev/sda1"
 
 
-def test_parse_show_totals_line_without_bytes_used_does_not_crash(capsys):
+def test_parse_show_totals_line_without_bytes_used_does_not_crash():
     show = [
         "Label: none  uuid: 11111111-2222-3333-4444-555555555555",
         "\tTotal devices 1",
@@ -49,7 +47,6 @@ def test_parse_show_totals_line_without_bytes_used_does_not_crash(capsys):
     ]
     uuid, fs_used, device_path, missing = statbtrfs.parse_show_info(show)
     assert fs_used is None
-    assert "Could not parse btrfs show info" in capsys.readouterr().out
 
 
 def test_parse_show_counts_devices_missing_from_listing():

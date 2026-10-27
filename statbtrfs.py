@@ -396,9 +396,6 @@ def parse_show_info(info):
             some_missing = True
     missing = max(marked_missing, (total_devices or 0) - len(device_paths), int(some_missing))
     device_path = ", ".join(device_paths) if device_paths else None
-    if fs_used is None or device_path is None or uuid is None:
-        print(f"{RED}Could not parse btrfs show info.{RESET}")
-        print(f"Output from btrfs filesystem show was:\n{info}")
     return uuid, fs_used, device_path, missing
 
 def format_device_path(device_path, missing):
