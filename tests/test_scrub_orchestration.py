@@ -53,8 +53,9 @@ def test_run_detached_missing_command(monkeypatch):
     assert output
 
 
-def test_exec_failure_mid_run_is_a_failed_start_not_a_crash(monkeypatch):
-    # fork EAGAIN / ENOMEM, or btrfs removed during a long -s: the queued scrubs must still be tried.
+def test_exec_failure_is_a_failed_start_not_a_crash(monkeypatch):
+    # fork EAGAIN / ENOMEM, or btrfs removed during a long -s: start_scrub reports a failed start, so the
+    # orchestration records it and goes on to the queued scrubs.
     def fail(command, **kw):
         raise OSError(11, "Resource temporarily unavailable")
     monkeypatch.setattr(statbtrfs, "USE_SUDO", False)

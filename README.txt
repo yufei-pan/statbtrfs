@@ -39,6 +39,8 @@ Upgrading to 0.38 from 0.37:
     filesystem show was:" and the raw output) are gone.
   - statbtrfs | head, or any reader that exits early, now ends quietly with exit 141 (128 + SIGPIPE)
     instead of a BrokenPipeError traceback and exit 1.
+  - Ctrl-C outside -s and -w (say while btrfs hangs on a dying device) exits 130 quietly instead of a
+    traceback.
   - -s and -w clear the screen with ESC[H ESC[J, so a long run no longer pushes tables into the scrollback of
     terminals that treat ESC[2J that way.
   - Library callers: find_btrfs_mounts() takes no argument and execute_command(s) lose wait=.

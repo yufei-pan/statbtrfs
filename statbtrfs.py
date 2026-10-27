@@ -212,7 +212,7 @@ print = functools.partial(print, flush=True)
 EXIT_OK = 0        # healthy
 EXIT_PROBLEMS = 1  # device errors, scrub errors or missing devices found
 EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, no root
-EXIT_INTERRUPTED = 130  # Ctrl-C during -s
+EXIT_INTERRUPTED = 130  # Ctrl-C
 EXIT_PIPE_CLOSED = 141  # the reader went away (`statbtrfs | head`): 128 + SIGPIPE, as a shell reports it, and as statblk does
 
 # Colors (set_color(False) blanks them)
