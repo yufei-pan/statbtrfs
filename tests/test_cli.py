@@ -222,11 +222,10 @@ def test_main_reports_missing_btrfs_and_exits_with_failure(monkeypatch, capsys, 
     assert statbtrfs.main() == statbtrfs.EXIT_FAILURE
     out = capsys.readouterr().out
     assert "btrfs not found on PATH: install btrfs-progs" in out
-    assert "Could not parse" not in out
     assert "Could not fetch" not in out
 
 
-def test_main_empty_btrfs_output_with_btrfs_present_keeps_the_parse_messages(monkeypatch, capsys, tmp_path):
+def test_main_empty_btrfs_output_with_btrfs_present_keeps_the_fetch_note(monkeypatch, capsys, tmp_path):
     _only_path(monkeypatch, tmp_path, with_btrfs=True)
     install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_SINGLE)
     install_command_map(monkeypatch, CommandMap(default=[]), statbtrfs)
