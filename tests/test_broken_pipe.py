@@ -1,4 +1,5 @@
 """`statbtrfs | head`: a reader that exits early ends the run quietly."""
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,9 +23,11 @@ sys.exit(statbtrfs.main())
 
 
 def test_closed_pipe_exits_quietly_with_statblks_code():
+    read_end, write_end = os.pipe()
+    os.close(read_end)  # a reader that has already gone, as with `| head -0`
     child = subprocess.Popen([sys.executable, "-c", CHILD.format(root=str(ROOT))],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    child.stdout.close()  # what `| head -0` does
+                             stdout=write_end, stderr=subprocess.PIPE)
+    os.close(write_end)
     _, err = child.communicate()
     assert err == b""  # no traceback, and no second error from the exit-time flush
     assert child.returncode == statbtrfs.EXIT_PIPE_CLOSED == 1
