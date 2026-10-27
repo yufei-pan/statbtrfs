@@ -22,7 +22,7 @@ sys.exit(statbtrfs.main())
 """
 
 
-def test_closed_pipe_exits_quietly_with_statblks_code():
+def test_closed_pipe_exits_quietly_with_141():
     read_end, write_end = os.pipe()
     os.close(read_end)  # a reader that has already gone, as with `| head -0`
     child = subprocess.Popen([sys.executable, "-c", CHILD.format(root=str(ROOT))],
@@ -30,7 +30,7 @@ def test_closed_pipe_exits_quietly_with_statblks_code():
     os.close(write_end)
     _, err = child.communicate()
     assert err == b""  # no traceback, and no second error from the exit-time flush
-    assert child.returncode == statbtrfs.EXIT_PIPE_CLOSED == 1
+    assert child.returncode == statbtrfs.EXIT_PIPE_CLOSED == 141
 
 
 def test_broken_pipe_from_any_print_is_caught(monkeypatch, capsys):

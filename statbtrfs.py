@@ -213,7 +213,7 @@ EXIT_OK = 0        # healthy
 EXIT_PROBLEMS = 1  # device errors, scrub errors or missing devices found
 EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, no root
 EXIT_INTERRUPTED = 130  # Ctrl-C during -s
-EXIT_PIPE_CLOSED = 1    # the reader went away (`statbtrfs | head`), as statblk does
+EXIT_PIPE_CLOSED = 141  # the reader went away (`statbtrfs | head`): 128 + SIGPIPE, as a shell reports it, and as statblk does
 
 # Colors (set_color(False) blanks them)
 _ANSI_COLORS = ("\033[91m", "\033[92m", "\033[93m", "\033[0m")
@@ -725,7 +725,8 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Check Btrfs filesystem status.",
         epilog="Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); "
-               "2 the check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted.")
+               "2 the check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted; "
+               "141 the reader of stdout went away (| head).")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
     mode.add_argument("-w", "--watch", action="store_true",

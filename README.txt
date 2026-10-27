@@ -26,7 +26,8 @@ options:
   -V, --version         show program's version number and exit
 
 Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); 2 the
-check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted.
+check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted; 141 the
+reader of stdout went away (| head).
 
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
@@ -36,8 +37,8 @@ Upgrading to 0.38 from 0.37:
   - An unreadable filesystem now prints only the note under the table, "Could not fetch complete info for
     <mounts>. Skipping...". The three lines before it ("Could not parse btrfs show info.", "Output from btrfs
     filesystem show was:" and the raw output) are gone.
-  - statbtrfs | head, or any reader that exits early, now ends quietly with exit 1 instead of a
-    BrokenPipeError traceback.
+  - statbtrfs | head, or any reader that exits early, now ends quietly with exit 141 (128 + SIGPIPE)
+    instead of a BrokenPipeError traceback and exit 1.
   - -s and -w clear the screen with ESC[H ESC[J, so a long run no longer pushes tables into the scrollback of
     terminals that treat ESC[2J that way.
   - Library callers: find_btrfs_mounts() takes no argument, execute_command(s) lose wait=, and run_detached
