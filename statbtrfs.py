@@ -213,6 +213,7 @@ EXIT_OK = 0        # healthy
 EXIT_PROBLEMS = 1  # device errors, scrub errors or missing devices found
 EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, no root
 EXIT_INTERRUPTED = 130  # Ctrl-C during -s
+EXIT_PIPE_CLOSED = 1    # the reader went away (`statbtrfs | head`), as statblk does
 
 # Colors (set_color(False) blanks them)
 _ANSI_COLORS = ("\033[91m", "\033[92m", "\033[93m", "\033[0m")
@@ -751,6 +752,19 @@ def build_parser():
     return parser
 
 def main():
+    try:
+        return run()
+    except BrokenPipeError:
+        # The reader went away (e.g. `statbtrfs | head`). Point stdout at devnull so the
+        # interpreter's exit-time flush doesn't raise a second BrokenPipeError.
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
+        return EXIT_PIPE_CLOSED
+
+def run():
     parser = build_parser()
     try:
         import argcomplete
