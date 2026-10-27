@@ -7,7 +7,7 @@ def test_module_imports_without_exiting():
 
 
 def test_embedded_multicmd_is_used_when_the_installed_one_is_older_and_lines_up_cjk(tmp_path):
-    # An installed multiCMD older than 1.55 is passed over for the embedded copy,
+    # An installed multiCMD older than 1.56 is passed over for the embedded copy,
     # whose tables size columns in terminal columns: a CJK character takes two.
     import os
     import subprocess
@@ -15,7 +15,7 @@ def test_embedded_multicmd_is_used_when_the_installed_one_is_older_and_lines_up_
     from pathlib import Path
 
     root = Path(statbtrfs.__file__).resolve().parent
-    (tmp_path / "multiCMD.py").write_text("version = '1.54'\n")
+    (tmp_path / "multiCMD.py").write_text("version = '1.55'\n")
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(tmp_path), str(root)]))
     out = subprocess.run(
         [sys.executable, "-c",
@@ -23,7 +23,7 @@ def test_embedded_multicmd_is_used_when_the_installed_one_is_older_and_lines_up_
          "print(m.version); print(m.pretty_format_table([['name', 'v'], ['中文', '1']], full=True), end='')"],
         cwd=str(tmp_path), env=env, stdout=subprocess.PIPE, check=True,
     ).stdout.decode("utf-8")
-    assert out == "1.55\nname | v\n-----+--\n中文 | 1\n"
+    assert out == "1.56\nname | v\n-----+--\n中文 | 1\n"
 
 
 def test_embedded_multicmd_reads_terminal_columns_when_stdout_is_piped(tmp_path):
