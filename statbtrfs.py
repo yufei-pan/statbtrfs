@@ -289,15 +289,15 @@ def acquire_root(argv):
         os.execv(sudo, [sudo, '--'] + command)
     USE_SUDO = True
 
-def execute_command(command,wait=True):
+def execute_command(command):
     if USE_SUDO:
         command = ['sudo'] + command
-    return multiCMD.run_command(command,quiet=True,wait_for_return=wait)
+    return multiCMD.run_command(command,quiet=True)
 
-def execute_commands(commands,wait=True):
+def execute_commands(commands):
     if USE_SUDO:
         commands = [['sudo']+command for command in commands]
-    return multiCMD.run_commands(commands,quiet=True,wait_for_return=wait,max_threads=MAX_PARALLEL_COMMANDS)
+    return multiCMD.run_commands(commands,quiet=True,max_threads=MAX_PARALLEL_COMMANDS)
 
 def btrfs_not_found():
     """Whether btrfs is missing from PATH (multiCMD's quiet=True hides its own "Command path not found"
