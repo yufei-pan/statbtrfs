@@ -31,6 +31,18 @@ check failed (no matching mounts, an unreadable filesystem, no root); 130 interr
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
+Upgrading to 0.38 from 0.37:
+  - multiCMD 1.56 or newer is required (the embedded copy is 1.56).
+  - An unreadable filesystem now prints only the note under the table, "Could not fetch complete info for
+    <mounts>. Skipping...". The three lines before it ("Could not parse btrfs show info.", "Output from btrfs
+    filesystem show was:" and the raw output) are gone.
+  - statbtrfs | head, or any reader that exits early, now ends quietly with exit 1 instead of a
+    BrokenPipeError traceback.
+  - -s and -w clear the screen with ESC[H ESC[J, so a long run no longer pushes tables into the scrollback of
+    terminals that treat ESC[2J that way.
+  - Library callers: find_btrfs_mounts() takes no argument, execute_command(s) lose wait=, and run_detached
+    raises OSError for a missing command instead of returning 127.
+
 Install:
 sudo pip install statbtrfs
 
