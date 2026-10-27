@@ -41,8 +41,7 @@ Upgrading to 0.38 from 0.37:
     instead of a BrokenPipeError traceback and exit 1.
   - -s and -w clear the screen with ESC[H ESC[J, so a long run no longer pushes tables into the scrollback of
     terminals that treat ESC[2J that way.
-  - Library callers: find_btrfs_mounts() takes no argument, execute_command(s) lose wait=, and run_detached
-    raises OSError for a missing command instead of returning 127.
+  - Library callers: find_btrfs_mounts() takes no argument and execute_command(s) lose wait=.
 
 Install:
 sudo pip install statbtrfs

@@ -46,6 +46,25 @@ def test_run_detached_uses_a_new_session(monkeypatch):
     assert int(output) != os.getsid(0)
 
 
+def test_run_detached_missing_command(monkeypatch):
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
+    code, output = run_detached(["/nonexistent/btrfs"])
+    assert code == 127
+    assert output
+
+
+def test_exec_failure_mid_run_is_a_failed_start_not_a_crash(monkeypatch):
+    # fork EAGAIN / ENOMEM, or btrfs removed during a long -s: the queued scrubs must still be tried.
+    def fail(command, **kw):
+        raise OSError(11, "Resource temporarily unavailable")
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
+    monkeypatch.setattr(statbtrfs, "run_detached", run_detached)
+    monkeypatch.setattr(statbtrfs.subprocess, "call", fail)
+    state, message = statbtrfs.start_scrub("/mnt/a")
+    assert state == "failed"
+    assert "Resource temporarily unavailable" in message
+
+
 def test_run_detached_prefixes_sudo_in_per_command_mode(monkeypatch):
     monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
     seen = []

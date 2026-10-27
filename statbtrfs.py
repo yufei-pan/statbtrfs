@@ -586,8 +586,11 @@ def run_detached(command):
     if USE_SUDO:
         command = ['sudo'] + command
     with tempfile.TemporaryFile() as output:
-        returncode = subprocess.call(command, stdin=subprocess.DEVNULL, stdout=output,
-                                     stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            returncode = subprocess.call(command, stdin=subprocess.DEVNULL, stdout=output,
+                                         stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError as e:
+            return 127, str(e)
         output.seek(0)
         return returncode, output.read().decode('utf-8', 'replace').strip()
 
