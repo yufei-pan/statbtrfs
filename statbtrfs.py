@@ -231,7 +231,7 @@ def set_color(enabled):
     global RED, GREEN, YELLOW, RESET
     RED, GREEN, YELLOW, RESET = _ANSI_COLORS if enabled else ("",) * 4
 
-CLEAR_SCREEN = "\033[H\033[2J"
+CLEAR_SCREEN = "\033[H\033[J"
 EVENT_LINES = 10
 
 class Screen:
