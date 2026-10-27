@@ -46,13 +46,6 @@ def test_run_detached_uses_a_new_session(monkeypatch):
     assert int(output) != os.getsid(0)
 
 
-def test_run_detached_missing_command(monkeypatch):
-    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
-    code, output = run_detached(["/nonexistent/btrfs"])
-    assert code == 127
-    assert output
-
-
 def test_run_detached_prefixes_sudo_in_per_command_mode(monkeypatch):
     monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
     seen = []
