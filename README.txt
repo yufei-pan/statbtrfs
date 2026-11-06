@@ -33,7 +33,8 @@ Known limitation: when each btrfs command has to run through sudo, a missing btr
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
 Upgrading to 0.39 from 0.38:
-  - The embedded multiCMD is now 1.57. It runs whenever the installed multiCMD is older, so nothing needs upgrading (stock pip 9.0.3 on EL7 and EL8 cannot upgrade multiCMD, and does not have to).
+  - The embedded multiCMD is now 1.57. It runs whenever the installed multiCMD is older, so multiCMD itself need not be upgraded. On EL7 and EL8, stock pip 9.0.3 cannot upgrade multiCMD, so `pip3 install -U statbtrfs` fails there: use `pip3 install statbtrfs==0.39`, or upgrade pip first.
+  - Known: on EL7, btrfs-progs 4.9.1's scrub status is not read, so `-s` can say a scrub finished while it runs and the status columns stay `Never`. A checksum error still shows. Planned for 0.40.
   - Faster command starts on Python 3.6 - 3.10, where the embedded multiCMD 1.57 imports only built-in
     modules in the wrapper that puts each command in its own process group (about 7 ms to 3.5 ms of CPU
     per command on Python 3.6.8). Nothing else about starting a command changes.
