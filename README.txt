@@ -33,7 +33,7 @@ Known limitation: when each btrfs command has to run through sudo, a missing btr
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
 Upgrading to 0.39 from 0.38:
-  - multiCMD 1.57 or newer is required (the embedded copy is 1.57).
+  - The embedded multiCMD is now 1.57. It runs whenever the installed multiCMD is older, so nothing needs upgrading (stock pip 9.0.3 on EL7 and EL8 cannot upgrade multiCMD, and does not have to).
   - Faster command starts on Python 3.6 - 3.10, where the embedded multiCMD 1.57 imports only built-in
     modules in the wrapper that puts each command in its own process group (about 7 ms to 3.5 ms of CPU
     per command on Python 3.6.8). Nothing else about starting a command changes.

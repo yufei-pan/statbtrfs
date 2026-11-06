@@ -11,3 +11,9 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
   apart would take another command and code path (asking sudo's PATH) for a rare setup.
 - Revisit when: someone hits it.
 - Approved: 2026-10-23, the user chose "Known limitation (Recommended)".
+
+### EL7's btrfs-progs 4.9.1 scrub status is not read
+- Kind: deferred
+- What the operator sees: on EL7, `statbtrfs -s` printed "All scrubs finished ... Never", exit 0, after 10 s while `btrfs scrub status` said it was running, and the status columns stay `Never` and `N/A` even after a scrub finishes. A real checksum error still shows, with `bit_rot=1` and exit 1. `-m` probably cannot hold scrubs back there, since the `running` list stays empty (read, not shown). Same in 0.38.
+- Why: `parse_scrub_status` knows only the modern `Status:` and `Scrub started:` lines, and the test fixtures are modern only.
+- Revisit when: statbtrfs 0.40.
