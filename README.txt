@@ -32,6 +32,12 @@ reader of stdout went away (| head).
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
+Upgrading to 0.39 from 0.38:
+  - multiCMD 1.57 or newer is required (the embedded copy is 1.57).
+  - Faster command starts on Python 3.6 - 3.10, where the embedded multiCMD 1.57 imports only built-in
+    modules in the wrapper that puts each command in its own process group (about 7 ms to 3.5 ms of CPU
+    per command on Python 3.6.8). Nothing else about starting a command changes.
+
 Upgrading to 0.38 from 0.37:
   - multiCMD 1.56 or newer is required (the embedded copy is 1.56).
   - An unreadable filesystem now prints only the note under the table, "Could not fetch complete info for
