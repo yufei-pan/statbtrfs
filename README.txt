@@ -35,7 +35,8 @@ complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/l
 Upgrading to 0.40 from 0.39:
   - EL7's btrfs-progs 4.9.1 scrub status is now read: -s and -w follow a running scrub, -m holds the next
     scrub back, -d skips recent ones, and the status columns fill in. It prints no rate, so scrub_rate stays
-    N/A there.
+    N/A there. For about the first 5 s of a scrub it prints only "no stats available", so the columns show
+    Never: -s waits that out whatever --scrub-command-lockout is.
   - The embedded multiCMD is now 1.58: no change to how commands run. The embedded copy also runs when the
     installed multiCMD fails to import in any way, not only when it is older or missing. multiCMD itself need
     not be upgraded.

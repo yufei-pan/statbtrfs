@@ -118,6 +118,23 @@ def test_old_progs_scrub_is_followed_until_it_finishes(monkeypatch, capsys):
     assert code == statbtrfs.EXIT_OK
 
 
+def test_old_progs_first_seconds_do_not_read_as_finished_with_a_short_lockout(monkeypatch, capsys):
+    # "no stats available" for about 5 s of a real scrub, and no lockout to wait it out.
+    fake = FakeBtrfs(["/mnt/a"], polls=20, stats_delay=3, old_progs=True).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "2"])
+    assert fake.state["/mnt/a"] == "finished"
+    assert "/mnt/a: finished, " in capsys.readouterr().out
+
+
+def test_a_scrub_that_never_reports_does_not_hold_the_run_for_ever(monkeypatch, capsys):
+    fake = FakeBtrfs(["/mnt/a"], start_results={"/mnt/a": ("started", "")}).install(monkeypatch, statbtrfs)
+    t0 = fake.clock
+    code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "2"])
+    assert statbtrfs.FIRST_SCRUB_RECORD_SECONDS <= fake.clock - t0 <= statbtrfs.FIRST_SCRUB_RECORD_SECONDS + 2
+    assert "/mnt/a: Never" in capsys.readouterr().out
+    assert code == statbtrfs.EXIT_OK
+
+
 def test_old_progs_scrub_errors_reach_the_summary_and_exit_code(monkeypatch, capsys):
     FakeBtrfs(["/mnt/a"], polls=8, errors=["/mnt/a"], old_progs=True).install(monkeypatch, statbtrfs)
     code = _run(monkeypatch, ["-s", "-i", "2"])

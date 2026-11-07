@@ -654,6 +654,10 @@ def describe_scrub(scrub_data):
         return scrub_data["scrub_status"]
     return f"{scrub_data['scrub_status']}, {scrub_data['error_summary']}"
 
+# Old btrfs-progs say "no stats available" until a scrub's first progress record, about 5 s in, and that
+# reads as Never. A scrub that ends always leaves a record, so one we know of that reads Never is still going.
+FIRST_SCRUB_RECORD_SECONDS = 10
+
 def scrub_filesystems(filesystems, args, screen):
     """-s: start scrubs in mountpoint order, keeping at most -m running, until every filesystem
     has been scrubbed. Prints a per-filesystem summary and returns the exit code."""
@@ -696,7 +700,10 @@ def scrub_filesystems(filesystems, args, screen):
             unconfirmed.clear()
             screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
             # A scrub just started may not show as running yet: wait out the lockout before trusting the count.
-            locked = last_start is not None and time.time() - last_start <= args.scrub_command_lockout
+            lockout = args.scrub_command_lockout
+            if any(status.scrubs.get(mount, {}).get("scrub_status") == "Never" for mount in started + adopted):
+                lockout = max(lockout, FIRST_SCRUB_RECORD_SECONDS)
+            locked = last_start is not None and time.time() - last_start <= lockout
             if queue and len(running) < max_running and not locked:
                 start_next()
             elif not queue and not running and not locked:
