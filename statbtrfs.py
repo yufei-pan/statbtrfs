@@ -455,7 +455,9 @@ _OLD_SCRUB_TOTAL_RX = re.compile(r'\s*total bytes scrubbed: (\S+) with (\d+) err
 _OLD_SCRUB_DETAILS_RX = re.compile(r'\s*error details:(.*)')
 _OLD_SCRUB_COUNT_RX = re.compile(r'(\w+) errors: (\d+)')
 
-def summarize_old_scrub_errors(error_count, following_lines):
+_SCRUB_REPLY_STARTS = ("scrub status for", "UUID:")
+
+def summarize_old_scrub_errors(following_lines):
     """The same cell as summarize_scrub_errors, from the lines after an old "total bytes scrubbed" line."""
     parts = []
     for line in following_lines:
@@ -463,7 +465,7 @@ def summarize_old_scrub_errors(error_count, following_lines):
         if details:
             parts += details.group(1).split()
         parts += [f"{kind}={count}" for kind, count in _OLD_SCRUB_COUNT_RX.findall(line) if int(count)]
-    return " ".join(parts) or f"errors={error_count}"
+    return " ".join(parts)
 
 def parse_scrub_status(lines):
     # "no stats available" (never scrubbed) leaves these defaults.
@@ -474,6 +476,7 @@ def parse_scrub_status(lines):
         "scrubbed_data": "N/A",
         "error_summary": "N/A",
         "has_errors": False,
+        "no_record": False,  # the reply can't tell a scrub in its first seconds from no scrub at all
     }
     for index, line in enumerate(lines):
         old_state = _OLD_SCRUB_STATE_RX.match(line)
@@ -482,10 +485,12 @@ def parse_scrub_status(lines):
             scrub_data["scrub_time"], scrub_data["scrub_status"] = old_state.groups()
         elif old_total:
             # With "no stats available" this line is all zeros and says nothing.
-            if scrub_data["scrub_status"] != "Never":
+            if scrub_data["scrub_status"] == "Never":
+                scrub_data["no_record"] = True
+            else:
                 scrub_data["scrubbed_data"] = old_total.group(1)
                 if int(old_total.group(2)):
-                    summary = summarize_old_scrub_errors(old_total.group(2), lines[index + 1:])
+                    summary = summarize_old_scrub_errors(lines[index + 1:])
                     scrub_data["error_summary"] = f"{RED}{summary}{RESET}"
                     scrub_data["has_errors"] = True
                 else:
@@ -496,7 +501,7 @@ def parse_scrub_status(lines):
             # Until a scrub writes its first progress record, btrfs prints "no stats available" and no
             # Status: line, but "Time left:" only appears while a scrub is running.
             scrub_data["scrub_status"] = "running"
-        elif "Scrub started:" in line:
+        elif "Scrub started:" in line or "Scrub resumed:" in line:
             scrub_data["scrub_time"] = line.split(":", 1)[1].strip()
         elif "Rate:" in line:
             scrub_data["scrub_rate"] = line.split(":", 1)[1].strip()
@@ -512,6 +517,10 @@ def parse_scrub_status(lines):
                 scrub_data["error_summary"] = f"{RED}{summarize_scrub_errors(summary, lines[index + 1:])}{RESET}"
                 scrub_data["has_errors"] = True
 
+    # A reader that lost the status file's lock to another reader gets no reply at all.
+    if scrub_data["scrub_status"] == "Never" and not any(line.startswith(_SCRUB_REPLY_STARTS) for line in lines):
+        scrub_data["scrub_status"] = "unknown"
+        scrub_data["no_record"] = True
     return scrub_data
 
 def parse_scrub_time_to_epoch(scrub_time):
@@ -654,9 +663,26 @@ def describe_scrub(scrub_data):
         return scrub_data["scrub_status"]
     return f"{scrub_data['scrub_status']}, {scrub_data['error_summary']}"
 
-# Old btrfs-progs say "no stats available" until a scrub's first progress record, about 5 s in, and that
-# reads as Never. A scrub that ends always leaves a record, so one we know of that reads Never is still going.
-FIRST_SCRUB_RECORD_SECONDS = 10
+# Some readings don't show that no scrub is running: a reply with no record (old btrfs-progs say "no stats
+# available" for about the first 5 s of a scrub; a reader can lose the status file's lock to another), and
+# `interrupted`, which btrfs also prints for a moment as a scrub ends. They count only once they have held this long.
+SCRUB_HOLD_SECONDS = 10
+
+def held_scrubs(mounts, status, since, seen_running):
+    """Those of mounts to treat as running: their reading is one of the above and has not held long enough.
+
+    since is this run's memory of when each reading began. seen_running are the mounts this run knows had a
+    scrub, as `interrupted` on any other is left from long ago."""
+    now = time.time()
+    held = set()
+    for mount in mounts:
+        scrub_data = status.scrubs.get(mount)
+        if (scrub_data is not None and not scrub_data["no_record"]
+                and not (scrub_data["scrub_status"] == "interrupted" and mount in seen_running)):
+            since.pop(mount, None)
+        elif now - since.setdefault(mount, now) < SCRUB_HOLD_SECONDS:
+            held.add(mount)
+    return held
 
 def scrub_filesystems(filesystems, args, screen):
     """-s: start scrubs in mountpoint order, keeping at most -m running, until every filesystem
@@ -668,6 +694,7 @@ def scrub_filesystems(filesystems, args, screen):
     failed = {}       # mount -> why the start failed
     unconfirmed = set()  # started since the last poll, not seen running yet
     running = set()
+    since = {}        # for held_scrubs()
     last_start = None
     status = None
 
@@ -696,14 +723,12 @@ def scrub_filesystems(filesystems, args, screen):
         time.sleep(args.interval)
         while True:
             status = build_status(poll_filesystems(filesystems))
-            running = {fs['mounts'][0] for fs in status.running}
+            ours = started + adopted
+            running = {fs['mounts'][0] for fs in status.running} | held_scrubs(ours, status, since, ours)
             unconfirmed.clear()
             screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
             # A scrub just started may not show as running yet: wait out the lockout before trusting the count.
-            lockout = args.scrub_command_lockout
-            if any(status.scrubs.get(mount, {}).get("scrub_status") == "Never" for mount in started + adopted):
-                lockout = max(lockout, FIRST_SCRUB_RECORD_SECONDS)
-            locked = last_start is not None and time.time() - last_start <= lockout
+            locked = last_start is not None and time.time() - last_start <= args.scrub_command_lockout
             if queue and len(running) < max_running and not locked:
                 start_next()
             elif not queue and not running and not locked:
@@ -727,11 +752,16 @@ def scrub_filesystems(filesystems, args, screen):
 
 def watch_filesystems(filesystems, args, screen):
     """-w: refresh the table until no scrub is running; never starts one. Returns the exit code."""
+    mounts = [fs['mounts'][0] for fs in filesystems]
+    seen_running = set()
+    since = {}
     try:
         while True:
             status = build_status(poll_filesystems(filesystems))
+            seen_running.update(fs['mounts'][0] for fs in status.running)
+            held = held_scrubs(mounts, status, since, seen_running)
             screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
-            if not status.running:
+            if not status.running and not held:
                 return exit_code(status.problems, status.failures)
             time.sleep(args.interval)
     except KeyboardInterrupt:

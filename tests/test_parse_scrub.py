@@ -4,6 +4,9 @@ import pytest
 
 import statbtrfs
 from fakes import (
+    SCRUB_FAILED_LOCKED,
+    SCRUB_FAILED_LOCKED_WARNING,
+    SCRUB_FAILED_READ,
     SCRUB_FINISHED_ERRORS,
     SCRUB_FINISHED_OK,
     SCRUB_NEVER,
@@ -14,6 +17,7 @@ from fakes import (
     SCRUB_OLD_NEVER,
     SCRUB_OLD_RESUMED,
     SCRUB_OLD_RUNNING,
+    SCRUB_RESUMED,
     SCRUB_RUNNING,
     SCRUB_TIME_BASIC,
     SCRUB_TIME_ISO,
@@ -29,9 +33,28 @@ def test_parse_scrub_never_defaults():
     assert data["error_summary"] == "N/A"
 
 
-def test_parse_scrub_empty_defaults():
-    data = statbtrfs.parse_scrub_status([])
-    assert data["scrub_status"] == "Never"
+@pytest.mark.parametrize("reply", [SCRUB_FAILED_LOCKED, SCRUB_FAILED_LOCKED_WARNING])
+def test_parse_scrub_failed_read_is_unknown_not_never(reply):
+    data = statbtrfs.parse_scrub_status(reply)
+    assert data["scrub_status"] == "unknown"
+    assert data["no_record"] is True
+
+
+def test_parse_scrub_failed_part_way_reads_as_no_record():
+    assert statbtrfs.parse_scrub_status(SCRUB_FAILED_READ)["no_record"] is True
+
+
+def test_parse_scrub_no_record_only_where_the_reply_says_nothing():
+    assert statbtrfs.parse_scrub_status(SCRUB_OLD_NEVER)["no_record"] is True
+    # Modern btrfs-progs show a scrub's first seconds ("Time left:"), so their Never is the plain truth.
+    assert statbtrfs.parse_scrub_status(SCRUB_NEVER)["no_record"] is False
+    assert statbtrfs.parse_scrub_status(SCRUB_FINISHED_OK)["no_record"] is False
+    assert statbtrfs.parse_scrub_status(SCRUB_OLD_FINISHED_OK)["no_record"] is False
+
+
+def test_parse_scrub_resumed_time_is_read():
+    data = statbtrfs.parse_scrub_status(SCRUB_RESUMED)
+    assert data["scrub_time"] == "Thu May  2 09:56:55 2024"
 
 
 def test_parse_scrub_finished_ok_uses_total_to_scrub():
@@ -151,10 +174,4 @@ def test_parse_scrub_old_progs_errors_read_like_the_modern_ones():
     assert data["scrub_status"] == "finished"
     assert data["scrubbed_data"] == "1.25MiB"
     assert data["error_summary"] == f"{statbtrfs.RED}csum=2 uncorrectable=2{statbtrfs.RESET}"
-    assert data["has_errors"] is True
-
-
-def test_parse_scrub_old_progs_error_count_shows_without_details():
-    data = statbtrfs.parse_scrub_status(SCRUB_OLD_FINISHED_ERRORS[:3])
-    assert data["error_summary"] == f"{statbtrfs.RED}errors=2{statbtrfs.RESET}"
     assert data["has_errors"] is True

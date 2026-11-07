@@ -11,3 +11,15 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
   apart would take another command and code path (asking sudo's PATH) for a rare setup.
 - Revisit when: someone hits it.
 - Approved: 2026-10-23, the user chose "Known limitation (Recommended)".
+
+### A scrub that did not complete still says OK
+- Kind: deferred
+- What the operator sees: `-s` ends with `aborted, OK` (a read-only mount) or `interrupted, OK` (after a kill) and exit 0, so a scrub that never covered the filesystem reads as healthy. It should say so and not exit 0.
+- Why: the fix changes the exit contract, so it goes in a release that says so.
+- Revisit when: statbtrfs 0.41.
+
+### scrub_rate is N/A on EL7
+- Kind: deferred
+- What the operator sees: btrfs-progs 4.9.1 prints no rate, so `scrub_rate` stays `N/A` there. The other columns fill in.
+- Why: it has to be computed from the bytes and the duration, which takes a size parser.
+- Revisit when: statbtrfs 0.41.

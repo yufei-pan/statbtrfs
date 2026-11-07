@@ -7,7 +7,16 @@ import time
 import pytest
 
 import statbtrfs
-from fakes import FakeBtrfs
+from fakes import (
+    SCRUB_FAILED_LOCKED,
+    SCRUB_FAILED_LOCKED_WARNING,
+    SCRUB_FAILED_READ,
+    SCRUB_NEVER,
+    SCRUB_OLD_INTERRUPTED,
+    SCRUB_OLD_RUNNING,
+    SCRUB_RUNNING,
+    FakeBtrfs,
+)
 
 # The unguarded function (conftest wraps statbtrfs.run_detached to block real btrfs commands).
 run_detached = statbtrfs.run_detached
@@ -127,12 +136,91 @@ def test_old_progs_first_seconds_do_not_read_as_finished_with_a_short_lockout(mo
 
 
 def test_a_scrub_that_never_reports_does_not_hold_the_run_for_ever(monkeypatch, capsys):
-    fake = FakeBtrfs(["/mnt/a"], start_results={"/mnt/a": ("started", "")}).install(monkeypatch, statbtrfs)
+    fake = FakeBtrfs(["/mnt/a"], old_progs=True, start_results={"/mnt/a": ("started", "")}).install(monkeypatch, statbtrfs)
     t0 = fake.clock
     code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "2"])
-    assert statbtrfs.FIRST_SCRUB_RECORD_SECONDS <= fake.clock - t0 <= statbtrfs.FIRST_SCRUB_RECORD_SECONDS + 2
+    assert statbtrfs.SCRUB_HOLD_SECONDS <= fake.clock - t0 <= statbtrfs.SCRUB_HOLD_SECONDS + 4
     assert "/mnt/a: Never" in capsys.readouterr().out
     assert code == statbtrfs.EXIT_OK
+
+
+FAILED_READS = [SCRUB_FAILED_LOCKED, SCRUB_FAILED_LOCKED_WARNING, SCRUB_FAILED_READ]
+
+
+@pytest.mark.parametrize("failed", FAILED_READS)
+def test_a_failed_status_read_does_not_end_the_run(monkeypatch, capsys, failed):
+    # Past the lockout, a second reader has the status file's lock for a poll or two.
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=20, old_progs=True,
+        replies={"/mnt/a": [None] * 12 + [failed, failed]},
+    ).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-i", "1"])
+    assert fake.state["/mnt/a"] == "finished"
+    assert "/mnt/a: finished, " in capsys.readouterr().out
+    assert code == statbtrfs.EXIT_OK
+
+
+@pytest.mark.parametrize("failed", [SCRUB_FAILED_LOCKED, SCRUB_FAILED_LOCKED_WARNING])
+def test_a_failed_status_read_does_not_end_the_run_on_modern_progs(monkeypatch, failed):
+    fake = FakeBtrfs(["/mnt/a"], polls=20, replies={"/mnt/a": [None] * 12 + [failed]}).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-s", "-i", "1"])
+    assert fake.state["/mnt/a"] == "finished"
+
+
+def test_a_failed_status_read_does_not_free_a_max_slot(monkeypatch):
+    fake = FakeBtrfs(
+        ["/mnt/a", "/mnt/b"], polls={"/mnt/a": 20, "/mnt/b": 1}, old_progs=True,
+        replies={"/mnt/a": [None] * 12 + [SCRUB_FAILED_LOCKED]},
+    ).install(monkeypatch, statbtrfs)
+    t0 = fake.clock
+    _run(monkeypatch, ["-s", "-m", "1", "--scrub_command_lockout", "0", "-i", "1"])
+    assert fake.started[1][1] - t0 >= 19
+
+
+def test_the_hold_outlasts_a_long_interval(monkeypatch):
+    # A reading must hold for the whole hold: the last running reading may be long past.
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=6, old_progs=True, replies={"/mnt/a": [None, SCRUB_FAILED_LOCKED]},
+    ).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-s", "-i", "60"])
+    assert fake.state["/mnt/a"] == "finished"
+
+
+def test_the_hold_does_not_pace_starts(monkeypatch):
+    # Filesystems reading Never in the queue hold nothing back: only -m and the lockout pace starts.
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b"], polls=1, old_progs=True).install(monkeypatch, statbtrfs)
+    t0 = fake.clock
+    _run(monkeypatch, ["-s", "-m", "1", "--scrub_command_lockout", "0", "-i", "1"])
+    assert fake.started[1][1] - t0 <= 2
+
+
+@pytest.mark.parametrize("running", [SCRUB_OLD_RUNNING, SCRUB_RUNNING], ids=["old", "modern"])
+def test_interrupted_at_the_very_end_of_a_scrub_is_read_past(monkeypatch, capsys, running):
+    # For a moment as a scrub ends, btrfs sees it gone from the kernel with no finished record yet.
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=14, replies={"/mnt/a": [running] * 12 + [SCRUB_OLD_INTERRUPTED]},
+    ).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-s", "-i", "1"])
+    assert "/mnt/a: finished, " in capsys.readouterr().out
+
+
+def test_a_really_interrupted_scrub_ends_the_run_after_the_hold(monkeypatch, capsys):
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=99, old_progs=True, replies={"/mnt/a": [None] * 12 + [SCRUB_OLD_INTERRUPTED] * 50},
+    ).install(monkeypatch, statbtrfs)
+    t0 = fake.clock
+    _run(monkeypatch, ["-s", "-i", "1"])
+    assert 12 + statbtrfs.SCRUB_HOLD_SECONDS <= fake.clock - t0 <= 12 + statbtrfs.SCRUB_HOLD_SECONDS + 3
+    assert "/mnt/a: interrupted, " in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("old", [False, True], ids=["modern", "old"])
+def test_ctrl_c_in_a_scrubs_first_seconds_still_names_it(monkeypatch, capsys, old):
+    # One poll done, the scrub still without a record: Ctrl-C must not lose it.
+    FakeBtrfs(["/mnt/a"], polls=20, stats_delay=5, old_progs=old, interrupt_on_sleep=2).install(monkeypatch, statbtrfs)
+    monkeypatch.setattr(statbtrfs.sys.stdin, "isatty", lambda: False, raising=False)
+    assert _run(monkeypatch, ["-s", "-i", "2"]) == statbtrfs.EXIT_INTERRUPTED
+    assert "Still running (started by this run): /mnt/a" in capsys.readouterr().out
 
 
 def test_old_progs_scrub_errors_reach_the_summary_and_exit_code(monkeypatch, capsys):
@@ -270,7 +358,7 @@ def test_ctrl_c_at_the_prompt_keeps_scrubs_running(monkeypatch):
 
 def test_describe_scrub():
     assert statbtrfs.describe_scrub(None) == "status unknown"
-    assert statbtrfs.describe_scrub(statbtrfs.parse_scrub_status([])) == "Never"
+    assert statbtrfs.describe_scrub(statbtrfs.parse_scrub_status(SCRUB_NEVER)) == "Never"
 
 
 def test_scrub_without_stats_yet_still_counts_as_running(monkeypatch, capsys):

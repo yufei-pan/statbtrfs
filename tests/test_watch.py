@@ -2,7 +2,7 @@
 import pytest
 
 import statbtrfs
-from fakes import FakeBtrfs
+from fakes import SCRUB_FAILED_LOCKED, SCRUB_OLD_INTERRUPTED, FakeBtrfs
 
 
 def _run(monkeypatch, argv):
@@ -24,6 +24,37 @@ def test_watch_follows_an_old_progs_scrub(monkeypatch):
     fake = FakeBtrfs(["/mnt/a"], polls=3, running=["/mnt/a"], old_progs=True).install(monkeypatch, statbtrfs)
     assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_OK
     assert fake.status_polls == 4
+
+
+def test_watch_right_after_a_start_on_old_progs_follows_the_scrub(monkeypatch):
+    # `btrfs scrub start /mnt; statbtrfs -w`: 4.9.1 says "no stats available" for about 5 s.
+    fake = FakeBtrfs(["/mnt/a"], polls=9, running=["/mnt/a"], stats_delay=0, old_progs=True)
+    fake.no_stats_yet["/mnt/a"] = 3
+    fake.install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-w", "-i", "2"]) == statbtrfs.EXIT_OK
+    assert fake.state["/mnt/a"] == "finished"
+    assert fake.status_polls == 10
+
+
+def test_watch_on_an_idle_old_progs_filesystem_ends_after_the_hold(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a"], old_progs=True).install(monkeypatch, statbtrfs)
+    t0 = fake.clock
+    assert _run(monkeypatch, ["-w", "-i", "2"]) == statbtrfs.EXIT_OK
+    assert statbtrfs.SCRUB_HOLD_SECONDS <= fake.clock - t0 <= statbtrfs.SCRUB_HOLD_SECONDS + 2
+
+
+def test_watch_survives_a_failed_status_read(monkeypatch):
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=9, running=["/mnt/a"], replies={"/mnt/a": [None, None, SCRUB_FAILED_LOCKED]},
+    ).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-w"])
+    assert fake.state["/mnt/a"] == "finished"
+
+
+def test_watch_does_not_hold_for_an_interrupted_scrub_of_long_ago(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a"], replies={"/mnt/a": [SCRUB_OLD_INTERRUPTED]}).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_OK
+    assert fake.status_polls == 1
 
 
 def test_watch_prints_once_when_nothing_is_running(monkeypatch, capsys):

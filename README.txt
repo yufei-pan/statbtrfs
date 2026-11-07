@@ -36,7 +36,13 @@ Upgrading to 0.40 from 0.39:
   - EL7's btrfs-progs 4.9.1 scrub status is now read: -s and -w follow a running scrub, -m holds the next
     scrub back, -d skips recent ones, and the status columns fill in. It prints no rate, so scrub_rate stays
     N/A there. For about the first 5 s of a scrub it prints only "no stats available", so the columns show
-    Never: -s waits that out whatever --scrub-command-lockout is.
+    Never.
+  - -s and -w no longer take a failed status read for "no scrub running". `btrfs scrub status` fails when
+    another reader has its file locked, so two watchers could end each other's runs. A failed read (shown as
+    unknown), `interrupted`, or on EL7 Never, now ends a run or frees a -m slot only once it has held for 10 s,
+    so -w on an idle, never-scrubbed EL7 filesystem takes 10 s to exit, and a really interrupted scrub is
+    reported 10 s later. Other hosts exit at once.
+  - A resumed scrub's time is now read on current btrfs-progs, so -d skips it.
   - The embedded multiCMD is now 1.58: no change to how commands run. The embedded copy also runs when the
     installed multiCMD fails to import in any way, not only when it is older or missing. multiCMD itself need
     not be upgraded.

@@ -195,6 +195,29 @@ SCRUB_OLD_FINISHED_ERRORS = [
     "\tcorrected errors: 0, uncorrectable errors: 2, unverified errors: 0",
 ]
 
+# What a status reader gets when another reader holds the status file's lock (flock LOCK_EX|LOCK_NB). The
+# warning is on stderr, rc 1: execute_commands returns stdout, so statbtrfs sees the empty reply.
+SCRUB_FAILED_LOCKED = []
+SCRUB_FAILED_LOCKED_WARNING = ["WARNING: failed to open status file: Resource temporarily unavailable"]
+# Reading the file failed part way: the warning, then a reply that reads like a filesystem never scrubbed.
+SCRUB_FAILED_READ = [
+    "WARNING: failed to read status: Connection reset by peer",
+    "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+    "\tno stats available",
+    "\ttotal bytes scrubbed: 0.00B with 0 errors",
+]
+
+# Modern btrfs-progs: "Scrub resumed:" takes the place of "Scrub started:".
+SCRUB_RESUMED = [
+    "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
+    "Scrub resumed:    Thu May  2 09:56:55 2024",
+    "Status:           finished",
+    "Duration:         0:10:00",
+    "Total to scrub:   10.00GiB",
+    "Rate:             17.00MiB/s",
+    "Error summary:    no errors found",
+]
+
 SCRUB_TIME_BASIC = "Thu May  2 09:56:55 2024"
 SCRUB_TIME_ISO = "2024-05-02 09:56:55"
 
@@ -285,11 +308,13 @@ class FakeBtrfs:
     finishes after ``polls`` status polls (int, or {mount: int}). ``running`` mounts start out
     running (started elsewhere), ``finished`` ones start out finished. ``start_results`` overrides
     start_scrub() per mount. ``interrupt_on_sleep`` raises KeyboardInterrupt on that sleep (1-based).
-    ``old_progs`` answers `btrfs scrub status` as btrfs-progs 4.9.1 does.
+    ``old_progs`` answers `btrfs scrub status` as btrfs-progs 4.9.1 does. ``replies`` ({mount: [reply, ...]})
+    answers that mount's status polls in turn, ``None`` leaving a poll to the simulation; a scrub goes on
+    underneath.
     """
 
     def __init__(self, mounts, polls=2, running=(), finished=(), errors=(), start_results=None,
-                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0, old_progs=False):
+                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0, old_progs=False, replies=None):
         self.mounts = list(mounts)
         self.polls = polls
         self.state = {m: "never" for m in self.mounts}
@@ -309,6 +334,7 @@ class FakeBtrfs:
         self.stats_delay = stats_delay
         self.no_stats_yet = {}
         self.old_progs = old_progs
+        self.replies = {m: list(r) for m, r in (replies or {}).items()}
 
     def _run(self, mount):
         self.state[mount] = "running"
@@ -349,6 +375,9 @@ class FakeBtrfs:
         if command[:3] == ["btrfs", "device", "stats"]:
             return list(STATS_ZERO)
         if command[:3] == ["btrfs", "scrub", "status"]:
+            reply = self.replies[mount].pop(0) if self.replies.get(mount) else None
+            if reply is not None:
+                return list(reply)
             state = self.state[mount]
             if state == "running":
                 if self.no_stats_yet.get(mount, 0) > 0:
