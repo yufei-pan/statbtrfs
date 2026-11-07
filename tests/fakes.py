@@ -149,6 +149,52 @@ SCRUB_FINISHED_ERRORS = [
     "  Unverified:     0",
 ]
 
+# Real btrfs-progs 4.9.1 output (EL7, 3.10.0-1160.119.1). The first seconds of every scrub, a repeat one
+# too, look exactly like a filesystem never scrubbed: the first progress record comes after about 5 s.
+SCRUB_OLD_NEVER = [
+    "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+    "\tno stats available",
+    "\ttotal bytes scrubbed: 0.00B with 0 errors",
+]
+
+SCRUB_OLD_RUNNING = [
+    "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+    "\tscrub started at Sat Nov  7 02:56:56 2026, running for 00:00:05",
+    "\ttotal bytes scrubbed: 1.20GiB with 0 errors",
+]
+
+SCRUB_OLD_FINISHED_OK = [
+    "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+    "\tscrub started at Sat Nov  7 02:55:51 2026 and finished after 00:00:02",
+    "\ttotal bytes scrubbed: 5.87GiB with 0 errors",
+]
+
+SCRUB_OLD_ABORTED = [
+    "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+    "\tscrub started at Sat Nov  7 02:56:56 2026 and was aborted after 00:00:12",
+    "\ttotal bytes scrubbed: 2.95GiB with 0 errors",
+]
+
+SCRUB_OLD_RESUMED = [
+    "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+    "\tscrub resumed at Sat Nov  7 02:57:08 2026 and finished after 00:00:26",
+    "\ttotal bytes scrubbed: 6.37GiB with 0 errors",
+]
+
+SCRUB_OLD_INTERRUPTED = [
+    "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+    "\tscrub started at Sat Nov  7 02:58:27 2026, interrupted after 00:00:05, not running",
+    "\ttotal bytes scrubbed: 1.18GiB with 0 errors",
+]
+
+SCRUB_OLD_FINISHED_ERRORS = [
+    "scrub status for 3d445201-1077-4e39-a195-8e1dcd7b946d",
+    "\tscrub started at Sat Nov  7 02:58:38 2026 and finished after 00:00:00",
+    "\ttotal bytes scrubbed: 1.25MiB with 2 errors",
+    "\terror details: csum=2",
+    "\tcorrected errors: 0, uncorrectable errors: 2, unverified errors: 0",
+]
+
 SCRUB_TIME_BASIC = "Thu May  2 09:56:55 2024"
 SCRUB_TIME_ISO = "2024-05-02 09:56:55"
 
@@ -239,10 +285,11 @@ class FakeBtrfs:
     finishes after ``polls`` status polls (int, or {mount: int}). ``running`` mounts start out
     running (started elsewhere), ``finished`` ones start out finished. ``start_results`` overrides
     start_scrub() per mount. ``interrupt_on_sleep`` raises KeyboardInterrupt on that sleep (1-based).
+    ``old_progs`` answers `btrfs scrub status` as btrfs-progs 4.9.1 does.
     """
 
     def __init__(self, mounts, polls=2, running=(), finished=(), errors=(), start_results=None,
-                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0):
+                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0, old_progs=False):
         self.mounts = list(mounts)
         self.polls = polls
         self.state = {m: "never" for m in self.mounts}
@@ -261,6 +308,7 @@ class FakeBtrfs:
         self.status_polls = 0
         self.stats_delay = stats_delay
         self.no_stats_yet = {}
+        self.old_progs = old_progs
 
     def _run(self, mount):
         self.state[mount] = "running"
@@ -305,13 +353,15 @@ class FakeBtrfs:
             if state == "running":
                 if self.no_stats_yet.get(mount, 0) > 0:
                     self.no_stats_yet[mount] -= 1
-                    return list(SCRUB_JUST_STARTED)
-                return list(SCRUB_RUNNING)
+                    return list(SCRUB_OLD_NEVER if self.old_progs else SCRUB_JUST_STARTED)
+                return list(SCRUB_OLD_RUNNING if self.old_progs else SCRUB_RUNNING)
             if state == "finished":
+                if self.old_progs:
+                    return list(SCRUB_OLD_FINISHED_ERRORS if mount in self.errors else SCRUB_OLD_FINISHED_OK)
                 return list(SCRUB_FINISHED_ERRORS if mount in self.errors else SCRUB_FINISHED_OK)
             if state == "aborted":
                 return [line.replace("finished", "aborted") for line in SCRUB_FINISHED_OK]
-            return list(SCRUB_NEVER)
+            return list(SCRUB_OLD_NEVER if self.old_progs else SCRUB_NEVER)
         return []
 
     def time(self):

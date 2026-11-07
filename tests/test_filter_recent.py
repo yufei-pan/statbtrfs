@@ -1,5 +1,5 @@
 import statbtrfs
-from fakes import SCRUB_FINISHED_OK, SCRUB_NEVER, SCRUB_RUNNING
+from fakes import SCRUB_FINISHED_OK, SCRUB_NEVER, SCRUB_OLD_FINISHED_OK, SCRUB_OLD_RUNNING, SCRUB_RUNNING
 
 
 def _fs(*mounts):
@@ -44,3 +44,11 @@ def test_filter_recent_keeps_never_and_running(monkeypatch):
     _serve_scrub_status(monkeypatch, {"/mnt/never": SCRUB_NEVER, "/mnt/run": SCRUB_RUNNING})
     filesystems = [_fs("/mnt/never"), _fs("/mnt/run")]
     assert statbtrfs.filter_recently_scrubbed(filesystems, 7) == (filesystems, [])
+
+
+def test_filter_recent_reads_old_progs(monkeypatch):
+    scrub_epoch = statbtrfs.parse_scrub_time_to_epoch("Sat Nov  7 02:55:51 2026")
+    monkeypatch.setattr(statbtrfs.time, "time", lambda: scrub_epoch + 2 * 24 * 3600)
+    _serve_scrub_status(monkeypatch, {"/mnt/done": SCRUB_OLD_FINISHED_OK, "/mnt/run": SCRUB_OLD_RUNNING})
+    done, run = _fs("/mnt/done"), _fs("/mnt/run")
+    assert statbtrfs.filter_recently_scrubbed([done, run], 7) == ([run], [done])

@@ -1,10 +1,19 @@
 from datetime import datetime
 
+import pytest
+
 import statbtrfs
 from fakes import (
     SCRUB_FINISHED_ERRORS,
     SCRUB_FINISHED_OK,
     SCRUB_NEVER,
+    SCRUB_OLD_ABORTED,
+    SCRUB_OLD_FINISHED_ERRORS,
+    SCRUB_OLD_FINISHED_OK,
+    SCRUB_OLD_INTERRUPTED,
+    SCRUB_OLD_NEVER,
+    SCRUB_OLD_RESUMED,
+    SCRUB_OLD_RUNNING,
     SCRUB_RUNNING,
     SCRUB_TIME_BASIC,
     SCRUB_TIME_ISO,
@@ -102,3 +111,50 @@ def test_parse_scrub_never_real_output():
     data = statbtrfs.parse_scrub_status(SCRUB_NEVER_REAL)
     assert data["scrub_status"] == "Never"
     assert data["has_errors"] is False
+
+
+# --- btrfs-progs 4.9.1 (EL7): real output ---------------------------------------
+
+@pytest.mark.parametrize("lines, status, time, scrubbed", [
+    (SCRUB_OLD_RUNNING, "running", "Sat Nov  7 02:56:56 2026", "1.20GiB"),
+    (SCRUB_OLD_FINISHED_OK, "finished", "Sat Nov  7 02:55:51 2026", "5.87GiB"),
+    (SCRUB_OLD_ABORTED, "aborted", "Sat Nov  7 02:56:56 2026", "2.95GiB"),
+    (SCRUB_OLD_RESUMED, "finished", "Sat Nov  7 02:57:08 2026", "6.37GiB"),
+    (SCRUB_OLD_INTERRUPTED, "interrupted", "Sat Nov  7 02:58:27 2026", "1.18GiB"),
+])
+def test_parse_scrub_old_progs(lines, status, time, scrubbed):
+    data = statbtrfs.parse_scrub_status(lines)
+    assert data["scrub_status"] == status
+    assert data["scrub_time"] == time
+    assert data["scrubbed_data"] == scrubbed
+    assert data["scrub_rate"] == "N/A"  # 4.9.1 prints no rate
+    assert data["error_summary"] == f"{statbtrfs.GREEN}OK{statbtrfs.RESET}"
+    assert data["has_errors"] is False
+
+
+def test_parse_scrub_old_progs_never_keeps_the_defaults():
+    data = statbtrfs.parse_scrub_status(SCRUB_OLD_NEVER)
+    assert data["scrub_status"] == "Never"
+    assert data["scrub_time"] == "N/A"
+    assert data["scrubbed_data"] == "N/A"
+    assert data["error_summary"] == "N/A"
+    assert data["has_errors"] is False
+
+
+def test_parse_scrub_old_progs_time_is_one_the_day_filter_reads():
+    data = statbtrfs.parse_scrub_status(SCRUB_OLD_FINISHED_OK)
+    assert statbtrfs.parse_scrub_time_to_epoch(data["scrub_time"]) is not None
+
+
+def test_parse_scrub_old_progs_errors_read_like_the_modern_ones():
+    data = statbtrfs.parse_scrub_status(SCRUB_OLD_FINISHED_ERRORS)
+    assert data["scrub_status"] == "finished"
+    assert data["scrubbed_data"] == "1.25MiB"
+    assert data["error_summary"] == f"{statbtrfs.RED}csum=2 uncorrectable=2{statbtrfs.RESET}"
+    assert data["has_errors"] is True
+
+
+def test_parse_scrub_old_progs_error_count_shows_without_details():
+    data = statbtrfs.parse_scrub_status(SCRUB_OLD_FINISHED_ERRORS[:3])
+    assert data["error_summary"] == f"{statbtrfs.RED}errors=2{statbtrfs.RESET}"
+    assert data["has_errors"] is True

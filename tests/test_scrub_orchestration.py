@@ -108,6 +108,30 @@ def test_first_wave_respects_max_and_refill_waits_for_lockout(monkeypatch, capsy
     assert "All scrubs finished." in capsys.readouterr().out
 
 
+def test_old_progs_scrub_is_followed_until_it_finishes(monkeypatch, capsys):
+    # btrfs-progs 4.9.1: "no stats available" for the first seconds, then "running for"; well past the lockout.
+    fake = FakeBtrfs(["/mnt/a"], polls=20, stats_delay=3, old_progs=True).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-i", "2"])
+    out = capsys.readouterr().out
+    assert fake.state["/mnt/a"] == "finished"
+    assert "/mnt/a: finished, " in out
+    assert code == statbtrfs.EXIT_OK
+
+
+def test_old_progs_scrub_errors_reach_the_summary_and_exit_code(monkeypatch, capsys):
+    FakeBtrfs(["/mnt/a"], polls=8, errors=["/mnt/a"], old_progs=True).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-i", "2"])
+    assert "csum=2 uncorrectable=2" in capsys.readouterr().out
+    assert code == statbtrfs.EXIT_PROBLEMS
+
+
+def test_old_progs_max_holds_the_next_scrub_back(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b"], polls={"/mnt/a": 20, "/mnt/b": 1}, old_progs=True).install(monkeypatch, statbtrfs)
+    t0 = fake.clock
+    _run(monkeypatch, ["-s", "-m", "1", "--scrub_command_lockout", "2", "-i", "1"])
+    assert fake.started[1][1] - t0 >= 19
+
+
 def test_max_zero_means_cpu_count(monkeypatch):
     monkeypatch.setattr(statbtrfs.os, "cpu_count", lambda: 1)
     fake = FakeBtrfs(["/mnt/a", "/mnt/b"], polls=1).install(monkeypatch, statbtrfs)

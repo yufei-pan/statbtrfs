@@ -32,8 +32,17 @@ reader of stdout went away (| head).
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
+Upgrading to 0.40 from 0.39:
+  - EL7's btrfs-progs 4.9.1 scrub status is now read: -s and -w follow a running scrub, -m holds the next
+    scrub back, -d skips recent ones, and the status columns fill in. It prints no rate, so scrub_rate stays
+    N/A there.
+  - The embedded multiCMD is now 1.58: no change to how commands run. The embedded copy also runs when the
+    installed multiCMD fails to import in any way, not only when it is older or missing. multiCMD itself need
+    not be upgraded.
+  - With multiCMD 1.57 or earlier installed, pip 9 (stock on EL7 and EL8) without `--user` stops `pip3 install -U statbtrfs` with `configparser.DuplicateOptionError`, because it upgrades dependencies too: use `pip3 install statbtrfs==0.40`, `pip3 install -U --no-deps statbtrfs`, or run `pip3 install -U pip` once. With `--user` it does not stop.
+
 Upgrading to 0.39 from 0.38:
-  - The embedded multiCMD is now 1.57. It runs whenever the installed multiCMD is older, so multiCMD itself need not be upgraded. On EL7 and EL8, stock pip 9.0.3 cannot upgrade multiCMD, so `pip3 install -U statbtrfs` fails there: use `pip3 install statbtrfs==0.39`, or upgrade pip first.
+  - The embedded multiCMD is now 1.57. It runs whenever the installed multiCMD is older, so multiCMD itself need not be upgraded. With multiCMD 1.57 or earlier installed, pip 9 (stock on EL7 and EL8) without `--user` stops `pip3 install -U statbtrfs` with `configparser.DuplicateOptionError`, because it upgrades dependencies too: use `pip3 install statbtrfs==0.39`, `pip3 install -U --no-deps statbtrfs`, or run `pip3 install -U pip` once. With `--user` it does not stop.
   - Known: on EL7, btrfs-progs 4.9.1's scrub status is not read, so `-s` can say a scrub finished while it runs and the status columns stay `Never`. A checksum error still shows. Planned for 0.40.
   - Faster command starts on Python 3.6 - 3.10, where the embedded multiCMD 1.57 imports only built-in
     modules in the wrapper that puts each command in its own process group (about 7 ms to 3.5 ms of CPU

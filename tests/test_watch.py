@@ -20,6 +20,12 @@ def test_watch_follows_running_scrubs_until_idle(monkeypatch):
     assert code == statbtrfs.EXIT_OK
 
 
+def test_watch_follows_an_old_progs_scrub(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a"], polls=3, running=["/mnt/a"], old_progs=True).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_OK
+    assert fake.status_polls == 4
+
+
 def test_watch_prints_once_when_nothing_is_running(monkeypatch, capsys):
     fake = FakeBtrfs(["/mnt/a"]).install(monkeypatch, statbtrfs)
     assert _run(monkeypatch, ["--watch"]) == statbtrfs.EXIT_OK
