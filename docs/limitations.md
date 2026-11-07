@@ -23,3 +23,15 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
 - What the operator sees: btrfs-progs 4.9.1 prints no rate, so `scrub_rate` stays `N/A` there. The other columns fill in.
 - Why: it has to be computed from the bytes and the duration, which takes a size parser.
 - Revisit when: statbtrfs 0.41.
+
+### A run that ends on `unknown` exits 0
+- Kind: deferred (0.41)
+- What the operator sees: a run whose last reading is a failed status read shows `unknown` and exits 0: a scrub that finished can read `a: unknown` in the summary if the status file stayed locked at the end.
+- Why: exit 2 for this changes the exit contract, with the incomplete-scrub entry.
+- Revisit when: 0.41.
+
+### A part-way status read at the end of a `-B` scrub reads as Never
+- Kind: deferred (0.41)
+- What the operator sees: a poll landing in a gap under a millisecond at the true end of a `-B` scrub started elsewhere can read a final Never with OK, so errors that scrub found are missed on that poll. Under 1 in 1,000 at 2 s polls by estimate; seen on 4.9.1 with a tight poll loop, not on 6.2.
+- Why: the reply has rc 0 on 4.9.1 and the failure is on stderr only, which the status read doesn't carry.
+- Revisit when: 0.41.
