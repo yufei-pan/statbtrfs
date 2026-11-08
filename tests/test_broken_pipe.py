@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, {root!r})
 import statbtrfs
 statbtrfs.read_proc_mounts = lambda: ["/dev/sdx /mnt/a btrfs rw 0 0"]
+statbtrfs.read_mountinfo = lambda path=None: []  # not the host's real /proc/self/mountinfo
 statbtrfs.execute_commands = {execute}
 statbtrfs._is_root = lambda: True
 statbtrfs.btrfs_not_found = lambda: False

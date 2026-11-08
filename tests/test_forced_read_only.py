@@ -179,8 +179,8 @@ def test_scrub_does_not_scrub_a_forced_filesystem(monkeypatch, capsys):
     code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"])
     out = capsys.readouterr().out
     assert [m for m, _ in fake.started] == ["/mnt/b"]
-    assert "Could not start scrub on /mnt/a: forced read-only after an error, not scrubbed" in out
-    assert "/mnt/a: failed to start: forced read-only after an error, not scrubbed" in out
+    assert "Could not start scrub on /mnt/a: forced read-only after an error; not started by this run" in out
+    assert "/mnt/a: failed to start: forced read-only after an error; not started by this run" in out
     assert "/mnt/b: finished, OK" in out
     assert code == statbtrfs.EXIT_PROBLEMS
 
@@ -458,3 +458,22 @@ def test_the_summary_counts_skipped_filesystems_in_the_plural(monkeypatch, capsy
           bad=("/mnt/a", "/mnt/b")).install(monkeypatch, statbtrfs)
     _run(monkeypatch, ["-d", "7"] + _SCRUB)
     assert "2 skipped by -d need attention" in capsys.readouterr().out
+
+
+def test_a_forced_filesystem_whose_show_cannot_be_read_is_still_reported(monkeypatch, capsys):
+    # No row (there is nothing to show without `btrfs filesystem show`): the note, and exit 1, not 2.
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (SHOW_INCOMPLETE, STATS_ZERO, SCRUB_FINISHED_OK)})
+    install_mountinfo(monkeypatch, statbtrfs, [FORCED])
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_PROBLEMS
+    out = capsys.readouterr().out
+    assert "Could not fetch complete info for /mnt/a" in out
+    assert "/mnt/a: read-only, though mounted read-write, so it takes no writes" in out
+
+
+def test_the_help_and_the_readme_list_the_exit_codes_of_0_43():
+    text = statbtrfs.build_parser().format_help().replace("\n", " ")
+    readme = open(statbtrfs.__file__.replace("statbtrfs.py", "README.txt"), encoding="utf-8").read().replace("\n", " ")
+    for words in ("forced read-only after an error", "an unreadable /proc/self/mountinfo, or a filesystem that could",
+                  "not be asked whether it was forced read-only"):
+        assert " ".join(text.split()).count(words) == 1
+        assert " ".join(readme.split()).count(words) >= 1

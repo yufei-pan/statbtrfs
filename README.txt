@@ -29,8 +29,9 @@ options:
 
 Exit status: 0 healthy; 1 problems found (device errors, scrub errors, missing devices, or a
 filesystem forced read-only after an error); 2 the check failed (no matching mounts, an unreadable
-filesystem, a scrub status that could not be read, a scrub that did not complete, no root); 130
-interrupted; 141 the reader of stdout went away (| head).
+filesystem, a scrub status that could not be read, a scrub that did not complete, an unreadable
+/proc/self/mountinfo, or a filesystem that could not be asked whether it was forced read-only, no
+root); 130 interrupted; 141 the reader of stdout went away (| head).
 
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
@@ -50,7 +51,7 @@ Upgrading to 0.43 from 0.42:
     and counts in the exit code, so `statbtrfs -s -d 7` exits 1 where 0.42 said "nothing to do" and exited 0.
     A healthy skipped filesystem stays out of the table, as before.
   - -s no longer scrubs such a filesystem (0.42 scrubbed it read-only and could end "finished, OK"): it is
-    listed as "failed to start: forced read-only after an error, not scrubbed", and the others are scrubbed.
+    listed as "failed to start: forced read-only after an error; not started by this run", and the others are scrubbed.
   - If /proc/self/mountinfo can't be read, a note says the state was not checked, and the exit code is 2.
 
 Upgrading to 0.42 from 0.41:

@@ -213,9 +213,10 @@ __version__ = version
 print = functools.partial(print, flush=True)
 
 EXIT_OK = 0        # healthy
-EXIT_PROBLEMS = 1  # device errors, scrub errors, missing devices, or a filesystem forced read-only found
+EXIT_PROBLEMS = 1  # device errors, scrub errors, missing devices, or a filesystem forced read-only after an error
 EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, a scrub status that could not be read,
-                   # a scrub that did not complete, no root
+                   # a scrub that did not complete, an unreadable /proc/self/mountinfo or a filesystem that could
+                   # not be asked whether it was forced read-only, no root
 EXIT_INTERRUPTED = 130  # Ctrl-C
 EXIT_PIPE_CLOSED = 141  # the reader went away (`statbtrfs | head`): 128 + SIGPIPE, as a shell reports it, and as statblk does
 
@@ -728,8 +729,8 @@ Status = namedtuple('Status', 'rows running problems failures notes scrubs')
 def build_status(polled):
     """Status of poll_filesystems() output: table rows, running filesystems, whether problems
     (device errors, scrub errors, missing devices, a filesystem forced read-only) or failures (unreadable
-    filesystems, a scrub status that could not be read, a scrub that did not complete, mountinfo unreadable) were seen, notes to show with the table, and
-    the parsed scrub status per first mountpoint."""
+    filesystems, a scrub status that could not be read, a scrub that did not complete, mountinfo unreadable)
+    were seen, notes to show with the table, and the parsed scrub status per first mountpoint."""
     rows, running, notes = [], [], []
     scrubs = {}
     problems = failures = False
@@ -737,18 +738,8 @@ def build_status(polled):
     untold = []     # filesystems that look forced read-only, which the check could not confirm
     for fs, filesystem_show, device_stats, scrub_output, forced in polled:
         uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
-        if uuid is None or fs_used is None or device_path is None:
-            notes.append(f"{RED}Could not fetch complete info for {', '.join(fs['mounts'])}. Skipping...{RESET}")
-            failures = True
-            continue
-        err_dict = parse_device_stats(device_stats)
-        scrub_data = parse_scrub_status(scrub_output)
-        scrubs[fs['mounts'][0]] = scrub_data
-        if scrub_data["scrub_status"] == "running":
-            running.append(fs)
-        if missing or any(err_dict.values()) or scrub_data["has_errors"]:
-            problems = True
         mounts = ', '.join(fs['mounts'])
+        # Whether it was forced read-only does not depend on `btrfs filesystem show`: apply it to every filesystem.
         if forced is True:
             problems = True
             notes.append(f"{RED}{mounts}: read-only, though mounted read-write, so it takes no writes: btrfs does this "
@@ -758,6 +749,17 @@ def build_status(polled):
             unchecked = True
         elif forced == UNTOLD:
             untold.append(mounts)
+        if uuid is None or fs_used is None or device_path is None:
+            notes.append(f"{RED}Could not fetch complete info for {mounts}. Skipping...{RESET}")
+            failures = True
+            continue
+        err_dict = parse_device_stats(device_stats)
+        scrub_data = parse_scrub_status(scrub_output)
+        scrubs[fs['mounts'][0]] = scrub_data
+        if scrub_data["scrub_status"] == "running":
+            running.append(fs)
+        if missing or any(err_dict.values()) or scrub_data["has_errors"]:
+            problems = True
         if scrub_data["scrub_status"] == "unknown":
             notes.append(f"{YELLOW}Could not read the scrub status of {mounts}.{RESET}")
             failures = True
@@ -929,7 +931,7 @@ def scrub_filesystems(filesystems, args, screen, skipped=None, skipped_filesyste
             # Forced read-only after an error, it would scrub read-only and could end "finished, OK": the error
             # comes first. Asked at the start, as it can happen while the run waits.
             if forced_state(fs, forced_read_only_mounts() or set()) is True:
-                state, message = 'failed', "forced read-only after an error, not scrubbed"
+                state, message = 'failed', "forced read-only after an error; not started by this run"
             else:
                 state, message = start_scrub(via[mount])
             if state == 'failed':
@@ -1065,7 +1067,8 @@ def build_parser():
         epilog="Exit status: 0 healthy; 1 problems found (device errors, scrub errors, missing devices, or a "
                "filesystem forced read-only after an error); "
                "2 the check failed (no matching mounts, an unreadable filesystem, a scrub status that could not be "
-               "read, a scrub that did not complete, no root); 130 interrupted; "
+               "read, a scrub that did not complete, an unreadable /proc/self/mountinfo, or a filesystem that could "
+               "not be asked whether it was forced read-only, no root); 130 interrupted; "
                "141 the reader of stdout went away (| head).")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
