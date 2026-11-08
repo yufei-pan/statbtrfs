@@ -199,12 +199,34 @@ SCRUB_OLD_FINISHED_ERRORS = [
 # warning is on stderr, rc 1: execute_commands returns stdout, so statbtrfs sees the empty reply.
 SCRUB_FAILED_LOCKED = []
 SCRUB_FAILED_LOCKED_WARNING = ["WARNING: failed to open status file: Resource temporarily unavailable"]
-# Reading the file failed part way: the warning, then a reply that reads like a filesystem never scrubbed.
+# Reading the progress failed part way, at the very end of a `-B` scrub started elsewhere: rc 0, a reply that reads
+# like a filesystem never scrubbed, and the warning on stderr, which execute_commands puts after stdout.
 SCRUB_FAILED_READ = [
-    "WARNING: failed to read status: Connection reset by peer",
     "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
     "\tno stats available",
     "\ttotal bytes scrubbed: 0.00B with 0 errors",
+    "WARNING: failed to read status: Connection reset by peer",
+]
+# The same failure on current btrfs-progs, built from SCRUB_NEVER_REAL and the same warning (cmds/scrub.c prints
+# it with the same words): not seen on 6.2, where a never-scrubbed reply is plain Never, not held.
+SCRUB_FAILED_READ_MODERN = [
+    "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
+    "\tno stats available",
+    "Total to scrub:   400.78MiB",
+    "Rate:             0.00B/s",
+    "Error summary:    no errors found",
+    "WARNING: failed to read status: Connection reset by peer",
+]
+
+# Current btrfs-progs after `btrfs scrub cancel`.
+SCRUB_ABORTED = [
+    "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
+    "Scrub started:    Thu May  2 09:56:55 2024",
+    "Status:           aborted",
+    "Duration:         0:00:12",
+    "Total to scrub:   10.00GiB",
+    "Rate:             17.00MiB/s",
+    "Error summary:    no errors found",
 ]
 
 # Modern btrfs-progs: "Scrub resumed:" takes the place of "Scrub started:".
@@ -389,7 +411,7 @@ class FakeBtrfs:
                     return list(SCRUB_OLD_FINISHED_ERRORS if mount in self.errors else SCRUB_OLD_FINISHED_OK)
                 return list(SCRUB_FINISHED_ERRORS if mount in self.errors else SCRUB_FINISHED_OK)
             if state == "aborted":
-                return [line.replace("finished", "aborted") for line in SCRUB_FINISHED_OK]
+                return list(SCRUB_OLD_ABORTED if self.old_progs else SCRUB_ABORTED)
             return list(SCRUB_OLD_NEVER if self.old_progs else SCRUB_NEVER)
         return []
 

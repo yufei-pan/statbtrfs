@@ -8,10 +8,13 @@ import pytest
 
 import statbtrfs
 from fakes import (
+    SCRUB_ABORTED,
     SCRUB_FAILED_LOCKED,
     SCRUB_FAILED_LOCKED_WARNING,
     SCRUB_FAILED_READ,
+    SCRUB_FAILED_READ_MODERN,
     SCRUB_NEVER,
+    SCRUB_OLD_ABORTED,
     SCRUB_OLD_INTERRUPTED,
     SCRUB_OLD_RUNNING,
     SCRUB_RUNNING,
@@ -212,6 +215,69 @@ def test_a_really_interrupted_scrub_ends_the_run_after_the_hold(monkeypatch, cap
     _run(monkeypatch, ["-s", "-i", "1"])
     assert 12 + statbtrfs.SCRUB_HOLD_SECONDS <= fake.clock - t0 <= 12 + statbtrfs.SCRUB_HOLD_SECONDS + 3
     assert "/mnt/a: interrupted, " in capsys.readouterr().out
+
+
+# --- a scrub that did not complete, a status that could not be read ---------------
+
+@pytest.mark.parametrize("old", [False, True], ids=["modern", "old"])
+def test_a_cancelled_scrub_is_not_ok_and_does_not_exit_0(monkeypatch, capsys, old):
+    # `btrfs scrub cancel` elsewhere, or a read-only mount: aborted.
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b"], polls=3, old_progs=old).install(monkeypatch, statbtrfs)
+    fake.replies["/mnt/a"] = [None] + [SCRUB_OLD_ABORTED if old else SCRUB_ABORTED] * 20
+    code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"])
+    out = capsys.readouterr().out
+    assert "All scrubs finished." not in out
+    assert "Scrubs ended; 1 did not complete or could not be read." in out
+    assert "/mnt/a: aborted, incomplete" in out
+    assert "/mnt/a: finished, OK" not in out and "/mnt/b: finished, OK" in out
+    assert "The last scrub of /mnt/a did not complete: continue it with `btrfs scrub resume /mnt/a`." in out
+    assert code == statbtrfs.EXIT_FAILURE
+
+
+def test_a_killed_scrub_is_not_ok_and_does_not_exit_0(monkeypatch, capsys):
+    FakeBtrfs(
+        ["/mnt/a"], polls=99, old_progs=True, replies={"/mnt/a": [None] * 12 + [SCRUB_OLD_INTERRUPTED] * 50},
+    ).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-i", "1"])
+    out = capsys.readouterr().out
+    assert "/mnt/a: interrupted, incomplete" in out
+    assert "All scrubs finished." not in out
+    assert code == statbtrfs.EXIT_FAILURE
+
+
+def test_an_incomplete_scrub_with_errors_exits_1(monkeypatch, capsys):
+    from fakes import SCRUB_FINISHED_ERRORS
+    aborted = [line.replace("finished", "aborted") for line in SCRUB_FINISHED_ERRORS]
+    FakeBtrfs(["/mnt/a"], polls=2, replies={"/mnt/a": [None, aborted]}).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"])
+    assert "/mnt/a: aborted, csum=3 uncorrectable=3" in capsys.readouterr().out
+    assert code == statbtrfs.EXIT_PROBLEMS
+
+
+def test_a_run_that_ends_on_a_failed_status_read_exits_2(monkeypatch, capsys):
+    # The status file stays locked by another reader past the hold: the run ends, but it can't say the scrub was OK.
+    FakeBtrfs(
+        ["/mnt/a"], polls=99, replies={"/mnt/a": [None] * 12 + [SCRUB_FAILED_LOCKED] * 50},
+    ).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-i", "1"])
+    out = capsys.readouterr().out
+    assert "/mnt/a: unknown" in out
+    assert "Could not read the scrub status of /mnt/a." in out
+    assert "All scrubs finished." not in out
+    assert code == statbtrfs.EXIT_FAILURE
+
+
+def test_a_part_way_read_at_the_end_of_a_scrub_does_not_hide_its_errors(monkeypatch, capsys):
+    # A `-B` scrub started elsewhere ends while a poll reads its progress: rc 0, a reply like a never-scrubbed one,
+    # and the warning on stderr. The run must read on to the finished record, and its errors.
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=13, running=["/mnt/a"], errors=["/mnt/a"],
+        replies={"/mnt/a": [SCRUB_RUNNING] * 12 + [SCRUB_FAILED_READ_MODERN]},
+    ).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-i", "1"])
+    assert fake.status_polls == 14
+    assert "/mnt/a: was already running; finished, csum=3 uncorrectable=3" in capsys.readouterr().out
+    assert code == statbtrfs.EXIT_PROBLEMS
 
 
 @pytest.mark.parametrize("old", [False, True], ids=["modern", "old"])

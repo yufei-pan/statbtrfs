@@ -4,12 +4,15 @@ import pytest
 
 import statbtrfs
 from fakes import (
+    SCRUB_ABORTED,
     SCRUB_FAILED_LOCKED,
     SCRUB_FAILED_LOCKED_WARNING,
     SCRUB_FAILED_READ,
+    SCRUB_FAILED_READ_MODERN,
     SCRUB_FINISHED_ERRORS,
     SCRUB_FINISHED_OK,
     SCRUB_NEVER,
+    SCRUB_NEVER_REAL,
     SCRUB_OLD_ABORTED,
     SCRUB_OLD_FINISHED_ERRORS,
     SCRUB_OLD_FINISHED_OK,
@@ -40,14 +43,21 @@ def test_parse_scrub_failed_read_is_unknown_not_never(reply):
     assert data["no_record"] is True
 
 
-def test_parse_scrub_failed_part_way_reads_as_no_record():
-    assert statbtrfs.parse_scrub_status(SCRUB_FAILED_READ)["no_record"] is True
+@pytest.mark.parametrize("reply", [SCRUB_FAILED_READ, SCRUB_FAILED_READ_MODERN], ids=["old", "modern"])
+def test_parse_scrub_failed_part_way_is_unknown_not_never(reply):
+    # rc 0 and a reply that reads like a filesystem never scrubbed: only the warning on stderr tells.
+    data = statbtrfs.parse_scrub_status(reply)
+    assert data["scrub_status"] == "unknown"
+    assert data["no_record"] is True
+    assert data["error_summary"] == "N/A"
+    assert data["scrub_rate"] == "N/A"
 
 
 def test_parse_scrub_no_record_only_where_the_reply_says_nothing():
     assert statbtrfs.parse_scrub_status(SCRUB_OLD_NEVER)["no_record"] is True
     # Modern btrfs-progs show a scrub's first seconds ("Time left:"), so their Never is the plain truth.
     assert statbtrfs.parse_scrub_status(SCRUB_NEVER)["no_record"] is False
+    assert statbtrfs.parse_scrub_status(SCRUB_NEVER_REAL)["no_record"] is False
     assert statbtrfs.parse_scrub_status(SCRUB_FINISHED_OK)["no_record"] is False
     assert statbtrfs.parse_scrub_status(SCRUB_OLD_FINISHED_OK)["no_record"] is False
 
@@ -106,6 +116,7 @@ def test_parse_scrub_error_summary_multiple_types_and_counts():
 
 def test_parse_scrub_error_summary_stops_at_first_non_count_line():
     data = statbtrfs.parse_scrub_status([
+        "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
         "Error summary:    csum=1",
         "  Uncorrectable:  1",
         "Something else:   7",
@@ -138,21 +149,83 @@ def test_parse_scrub_never_real_output():
 
 # --- btrfs-progs 4.9.1 (EL7): real output ---------------------------------------
 
-@pytest.mark.parametrize("lines, status, time, scrubbed", [
-    (SCRUB_OLD_RUNNING, "running", "Sat Nov  7 02:56:56 2026", "1.20GiB"),
-    (SCRUB_OLD_FINISHED_OK, "finished", "Sat Nov  7 02:55:51 2026", "5.87GiB"),
-    (SCRUB_OLD_ABORTED, "aborted", "Sat Nov  7 02:56:56 2026", "2.95GiB"),
-    (SCRUB_OLD_RESUMED, "finished", "Sat Nov  7 02:57:08 2026", "6.37GiB"),
-    (SCRUB_OLD_INTERRUPTED, "interrupted", "Sat Nov  7 02:58:27 2026", "1.18GiB"),
+OK = "OK"
+INCOMPLETE = "incomplete"
+
+
+# 4.9.1 prints no rate: it is the bytes over the duration, as current btrfs-progs compute it.
+@pytest.mark.parametrize("lines, status, time, scrubbed, rate, summary", [
+    (SCRUB_OLD_RUNNING, "running", "Sat Nov  7 02:56:56 2026", "1.20GiB", "245.76MiB/s", OK),         # / 5 s
+    (SCRUB_OLD_FINISHED_OK, "finished", "Sat Nov  7 02:55:51 2026", "5.87GiB", "2.94GiB/s", OK),      # / 2 s
+    (SCRUB_OLD_ABORTED, "aborted", "Sat Nov  7 02:56:56 2026", "2.95GiB", "251.73MiB/s", INCOMPLETE),  # / 12 s
+    (SCRUB_OLD_RESUMED, "finished", "Sat Nov  7 02:57:08 2026", "6.37GiB", "250.88MiB/s", OK),        # / 26 s
+    (SCRUB_OLD_INTERRUPTED, "interrupted", "Sat Nov  7 02:58:27 2026", "1.18GiB", "241.66MiB/s", INCOMPLETE),
 ])
-def test_parse_scrub_old_progs(lines, status, time, scrubbed):
+def test_parse_scrub_old_progs(lines, status, time, scrubbed, rate, summary):
     data = statbtrfs.parse_scrub_status(lines)
     assert data["scrub_status"] == status
     assert data["scrub_time"] == time
     assert data["scrubbed_data"] == scrubbed
-    assert data["scrub_rate"] == "N/A"  # 4.9.1 prints no rate
-    assert data["error_summary"] == f"{statbtrfs.GREEN}OK{statbtrfs.RESET}"
+    assert data["scrub_rate"] == rate
+    color = statbtrfs.GREEN if summary == OK else statbtrfs.YELLOW
+    assert data["error_summary"] == f"{color}{summary}{statbtrfs.RESET}"
     assert data["has_errors"] is False
+    assert data["incomplete"] is (summary == INCOMPLETE)
+
+
+def test_parse_scrub_old_progs_rate_under_a_second_is_not_a_number():
+    # "finished after 00:00:00": no rate to tell.
+    assert statbtrfs.parse_scrub_status(SCRUB_OLD_FINISHED_ERRORS)["scrub_rate"] == "N/A"
+
+
+def test_parse_scrub_old_progs_rate_over_a_day():
+    data = statbtrfs.parse_scrub_status([
+        "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
+        "\tscrub started at Sat Nov  7 02:55:51 2026 and finished after 100:00:00",
+        "\ttotal bytes scrubbed: 351.57TiB with 0 errors",
+    ])
+    assert data["scrub_status"] == "finished"
+    assert data["scrub_rate"] == "1.00GiB/s"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("0.00B", 0), ("512.00B", 512), ("1.00KiB", 1024), ("1.25MiB", 1.25 * 2 ** 20), ("5.87GiB", 5.87 * 2 ** 30),
+    ("2.00TiB", 2 * 2 ** 40), ("1.00PiB", 2 ** 50), ("1.00EiB", 2 ** 60), (" 3.50GiB ", 3.5 * 2 ** 30),
+])
+def test_parse_size(text, expected):
+    assert statbtrfs.parse_size(text) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("text", ["", "N/A", "1.00", "GiB", "1.00 GiB", "1.00GB", "1.00gib", "-1.00GiB", "1.00GiBx"])
+def test_parse_size_refuses_what_btrfs_does_not_print(text):
+    assert statbtrfs.parse_size(text) is None
+
+
+@pytest.mark.parametrize("num_bytes, expected", [
+    (0, "0.00B"), (1023, "1023.00B"), (1024, "1.00KiB"), (17.0 * 2 ** 20, "17.00MiB"), (2 ** 70, "1024.00EiB"),
+])
+def test_format_size_as_btrfs_prints_it(num_bytes, expected):
+    assert statbtrfs.format_size(num_bytes) == expected
+
+
+def test_parse_scrub_modern_aborted_is_incomplete_not_ok():
+    data = statbtrfs.parse_scrub_status(SCRUB_ABORTED)
+    assert data["scrub_status"] == "aborted"
+    assert data["incomplete"] is True
+    assert data["has_errors"] is False
+    assert data["error_summary"] == f"{statbtrfs.YELLOW}incomplete{statbtrfs.RESET}"
+
+
+def test_parse_scrub_incomplete_with_errors_still_shows_the_errors():
+    data = statbtrfs.parse_scrub_status([line.replace("finished", "aborted") for line in SCRUB_FINISHED_ERRORS])
+    assert data["incomplete"] is True
+    assert data["has_errors"] is True
+    assert data["error_summary"] == f"{statbtrfs.RED}csum=3 uncorrectable=3{statbtrfs.RESET}"
+
+
+def test_parse_scrub_complete_readings_are_not_incomplete():
+    for reply in (SCRUB_FINISHED_OK, SCRUB_RUNNING, SCRUB_NEVER_REAL, SCRUB_OLD_NEVER, SCRUB_FAILED_LOCKED):
+        assert statbtrfs.parse_scrub_status(reply)["incomplete"] is False
 
 
 def test_parse_scrub_old_progs_never_keeps_the_defaults():

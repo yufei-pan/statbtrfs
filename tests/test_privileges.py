@@ -89,3 +89,25 @@ def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
     statbtrfs.execute_commands([["btrfs", "device", "stats", "/mnt/a"]])
     assert seen["cmds"] == [["sudo", "btrfs", "device", "stats", "/mnt/a"]]
     assert seen["kw"]["max_threads"] == statbtrfs.MAX_PARALLEL_COMMANDS
+
+
+def test_btrfs_replies_carry_stderr_after_stdout(monkeypatch):
+    # `btrfs scrub status` that fails to read part way exits 0 and says so only on stderr.
+    from fakes import SCRUB_FAILED_READ_MODERN, SHOW_SINGLE, STATS_ZERO
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
+    stdout = {"show": SHOW_SINGLE, "stats": STATS_ZERO, "status": SCRUB_FAILED_READ_MODERN[:-1]}
+    stderr = {"status": SCRUB_FAILED_READ_MODERN[-1:]}
+
+    def run_commands(cmds, with_stdErr=False, **kw):
+        return [stdout[c[2]] + (stderr.get(c[2], []) if with_stdErr else []) for c in cmds]
+
+    def run_command(cmd, with_stdErr=False, **kw):
+        return run_commands([cmd], with_stdErr=with_stdErr)[0]
+
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_commands", run_commands)
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_command", run_command)
+    fs = {"uuid": None, "mounts": ["/mnt/a"]}
+    status = statbtrfs.build_status(statbtrfs.poll_filesystems([fs]))
+    assert status.scrubs["/mnt/a"]["scrub_status"] == "unknown"
+    assert status.failures is True
+    assert statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"]) == SCRUB_FAILED_READ_MODERN

@@ -2,7 +2,7 @@
 import pytest
 
 import statbtrfs
-from fakes import SCRUB_FAILED_LOCKED, SCRUB_OLD_INTERRUPTED, FakeBtrfs
+from fakes import SCRUB_FAILED_LOCKED, SCRUB_FAILED_READ_MODERN, SCRUB_OLD_INTERRUPTED, FakeBtrfs
 
 
 def _run(monkeypatch, argv):
@@ -53,8 +53,26 @@ def test_watch_survives_a_failed_status_read(monkeypatch):
 
 def test_watch_does_not_hold_for_an_interrupted_scrub_of_long_ago(monkeypatch):
     fake = FakeBtrfs(["/mnt/a"], replies={"/mnt/a": [SCRUB_OLD_INTERRUPTED]}).install(monkeypatch, statbtrfs)
-    assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_OK
+    # It does not wait for it, but the last scrub did not complete: not healthy.
+    assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_FAILURE
     assert fake.status_polls == 1
+
+
+def test_watch_ending_on_a_failed_status_read_exits_2(monkeypatch):
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=99, running=["/mnt/a"], replies={"/mnt/a": [None] * 3 + [SCRUB_FAILED_LOCKED] * 50},
+    ).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_FAILURE
+    assert fake.status_polls > 3
+
+
+def test_watch_reads_past_a_part_way_read_at_the_end_of_a_scrub(monkeypatch):
+    fake = FakeBtrfs(
+        ["/mnt/a"], polls=4, running=["/mnt/a"], errors=["/mnt/a"],
+        replies={"/mnt/a": [None] * 3 + [SCRUB_FAILED_READ_MODERN]},
+    ).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_PROBLEMS
+    assert fake.status_polls == 5
 
 
 def test_watch_prints_once_when_nothing_is_running(monkeypatch, capsys):

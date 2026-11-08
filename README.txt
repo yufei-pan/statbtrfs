@@ -26,11 +26,30 @@ options:
   -V, --version         show program's version number and exit
 
 Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); 2 the
-check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted; 141 the
-reader of stdout went away (| head).
+check failed (no matching mounts, an unreadable filesystem, a scrub status that could not be read,
+a scrub that did not complete, no root); 130 interrupted; 141 the reader of stdout went away (|
+head).
 
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
+
+Upgrading to 0.41 from 0.40:
+  - A scrub that did not complete (`aborted`: cancelled, or a read-only mount; `interrupted`: its process was
+    killed) no longer reads OK: its error_summary shows `incomplete` (errors it found still show, and exit 1),
+    a note under the table says to continue it with `btrfs scrub resume <mount>`, `-s` ends with "Scrubs ended;
+    N did not complete or could not be read." instead of "All scrubs finished.", and the exit code is 2, the
+    check failed: it found nothing wrong, but it did not check everything. This holds without -s too, for as
+    long as the last scrub is the incomplete one, so a monitor running plain `statbtrfs` exits 2 until a scrub
+    completes.
+  - A scrub status that could not be read (`unknown`: another reader held the status file's lock, or the read
+    failed) now exits 2 with the note "Could not read the scrub status of <mount>." In -s and -w that is only
+    when it is still unreadable once the run ends (a reading like this holds a run for 10 s, as in 0.40);
+    without -s a status read that collides with another reader exits 2 where 0.40 exited 0.
+  - btrfs's stderr now reaches the parsers, after its stdout. A status read that failed part way, which
+    btrfs-progs report only there and with exit 0 (seen at the very end of a `btrfs scrub start -B` started
+    elsewhere), reads as unknown instead of Never, so -s and -w read on to the finished record and its errors.
+  - EL7 (btrfs-progs 4.9.1): scrub_rate is now filled in, computed as the bytes scrubbed over the duration, as
+    current btrfs-progs compute it. A scrub that took under a second still shows N/A.
 
 Upgrading to 0.40 from 0.39:
   - EL7's btrfs-progs 4.9.1 scrub status is now read: -s and -w follow a running scrub, -m holds the next

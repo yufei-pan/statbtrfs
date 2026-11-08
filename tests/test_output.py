@@ -66,6 +66,23 @@ def test_exit_failure_when_a_filesystem_cannot_be_read(monkeypatch):
     assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
 
 
+@pytest.mark.parametrize("scrub", ["SCRUB_ABORTED", "SCRUB_OLD_ABORTED", "SCRUB_OLD_INTERRUPTED"])
+def test_exit_failure_when_the_last_scrub_did_not_complete(monkeypatch, capsys, scrub):
+    import fakes
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), STATS_ZERO, getattr(fakes, scrub))})
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    assert "The last scrub of /mnt/a did not complete" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("scrub", ["SCRUB_FAILED_LOCKED", "SCRUB_FAILED_LOCKED_WARNING", "SCRUB_FAILED_READ",
+                                   "SCRUB_FAILED_READ_MODERN"])
+def test_exit_failure_when_the_scrub_status_cannot_be_read(monkeypatch, capsys, scrub):
+    import fakes
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), STATS_ZERO, getattr(fakes, scrub))})
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    assert "Could not read the scrub status of /mnt/a." in capsys.readouterr().out
+
+
 def test_problems_take_precedence_over_failures(monkeypatch):
     install_status(monkeypatch, statbtrfs, {
         "/mnt/a": (make_show(uuid_for(1)), STATS_ZERO, SCRUB_FINISHED_ERRORS),

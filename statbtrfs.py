@@ -291,15 +291,17 @@ def acquire_root(argv):
         os.execv(sudo, [sudo, '--'] + command)
     USE_SUDO = True
 
+# Each reply is the command's stdout, then its stderr: btrfs reports some failures only there (`scrub
+# status` that failed to read the status file part way still exits 0). The parsers skip lines they don't know.
 def execute_command(command):
     if USE_SUDO:
         command = ['sudo'] + command
-    return multiCMD.run_command(command,quiet=True)
+    return multiCMD.run_command(command,quiet=True,with_stdErr=True)
 
 def execute_commands(commands):
     if USE_SUDO:
         commands = [['sudo']+command for command in commands]
-    return multiCMD.run_commands(commands,quiet=True,max_threads=MAX_PARALLEL_COMMANDS)
+    return multiCMD.run_commands(commands,quiet=True,with_stdErr=True,max_threads=MAX_PARALLEL_COMMANDS)
 
 def btrfs_not_found():
     """Whether btrfs is missing from PATH (multiCMD's quiet=True hides its own "Command path not found"
@@ -450,12 +452,39 @@ def summarize_scrub_errors(summary, following_lines):
 #   error details: csum=2
 #   corrected errors: 0, uncorrectable errors: 2, unverified errors: 0
 _OLD_SCRUB_STATE_RX = re.compile(r'\s*scrub (?:started|resumed) at (.+?)(?:,| and(?: was)?) '
-                                 r'(running|finished|aborted|interrupted) (?:for|after) ')
+                                 r'(running|finished|aborted|interrupted) (?:for|after) (\d+):(\d\d):(\d\d)')
 _OLD_SCRUB_TOTAL_RX = re.compile(r'\s*total bytes scrubbed: (\S+) with (\d+) errors')
 _OLD_SCRUB_DETAILS_RX = re.compile(r'\s*error details:(.*)')
 _OLD_SCRUB_COUNT_RX = re.compile(r'(\w+) errors: (\d+)')
 
 _SCRUB_REPLY_STARTS = ("scrub status for", "UUID:")
+# btrfs-progs 4.9.1 and current print these on stderr when the status file can't be opened (another reader holds
+# its lock: rc 1, no reply) or read (at the very end of a `-B` scrub: rc 0, and a reply that says nothing).
+_SCRUB_READ_FAILED_RX = re.compile(r'WARNING: failed to (?:open status file|read status)\b')
+# What a failed status read shows: nothing in it can be trusted.
+SCRUB_UNKNOWN = {"scrub_status": "unknown", "scrub_time": "N/A", "scrub_rate": "N/A", "scrubbed_data": "N/A",
+                 "error_summary": "N/A", "has_errors": False, "no_record": True}
+# A scrub that stopped before covering the filesystem: cancelled (aborted) or its process killed (interrupted).
+SCRUB_INCOMPLETE = ("aborted", "interrupted")
+
+# Sizes as btrfs-progs prints them (pretty_size: two decimals, binary units), e.g. "5.87GiB", "0.00B".
+_SIZE_UNITS = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
+_SIZE_RX = re.compile(r'(\d+(?:\.\d+)?)(' + '|'.join(_SIZE_UNITS) + r')')
+
+def parse_size(text):
+    """Bytes in a btrfs-progs size, or None if text is not one."""
+    match = _SIZE_RX.fullmatch(text.strip())
+    if not match:
+        return None
+    return float(match.group(1)) * 1024 ** _SIZE_UNITS.index(match.group(2))
+
+def format_size(num_bytes):
+    """num_bytes as btrfs-progs prints a size."""
+    value, unit = float(num_bytes), 0
+    while value >= 1024 and unit < len(_SIZE_UNITS) - 1:
+        value /= 1024
+        unit += 1
+    return f"{value:.2f}{_SIZE_UNITS[unit]}"
 
 def summarize_old_scrub_errors(following_lines):
     """The same cell as summarize_scrub_errors, from the lines after an old "total bytes scrubbed" line."""
@@ -478,17 +507,23 @@ def parse_scrub_status(lines):
         "has_errors": False,
         "no_record": False,  # the reply can't tell a scrub in its first seconds from no scrub at all
     }
+    old_seconds = 0  # the old format's duration, for the rate it doesn't print
     for index, line in enumerate(lines):
         old_state = _OLD_SCRUB_STATE_RX.match(line)
         old_total = _OLD_SCRUB_TOTAL_RX.match(line)
         if old_state:
-            scrub_data["scrub_time"], scrub_data["scrub_status"] = old_state.groups()
+            scrub_data["scrub_time"], scrub_data["scrub_status"], hours, minutes, seconds = old_state.groups()
+            old_seconds = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
         elif old_total:
             # With "no stats available" this line is all zeros and says nothing.
             if scrub_data["scrub_status"] == "Never":
                 scrub_data["no_record"] = True
             else:
                 scrub_data["scrubbed_data"] = old_total.group(1)
+                scrubbed = parse_size(old_total.group(1))
+                # Under a second there is no rate to tell; modern btrfs-progs show 0.00B/s there.
+                if scrubbed is not None and old_seconds:
+                    scrub_data["scrub_rate"] = format_size(scrubbed / old_seconds) + "/s"
                 if int(old_total.group(2)):
                     summary = summarize_old_scrub_errors(lines[index + 1:])
                     scrub_data["error_summary"] = f"{RED}{summary}{RESET}"
@@ -517,10 +552,15 @@ def parse_scrub_status(lines):
                 scrub_data["error_summary"] = f"{RED}{summarize_scrub_errors(summary, lines[index + 1:])}{RESET}"
                 scrub_data["has_errors"] = True
 
-    # A reader that lost the status file's lock to another reader gets no reply at all.
-    if scrub_data["scrub_status"] == "Never" and not any(line.startswith(_SCRUB_REPLY_STARTS) for line in lines):
-        scrub_data["scrub_status"] = "unknown"
-        scrub_data["no_record"] = True
+    # A reader that lost the status file's lock to another reader gets no reply at all, and one whose read failed
+    # part way gets a reply that reads like a filesystem never scrubbed: neither tells anything.
+    if (any(_SCRUB_READ_FAILED_RX.match(line) for line in lines)
+            or scrub_data["scrub_status"] == "Never" and not any(line.startswith(_SCRUB_REPLY_STARTS) for line in lines)):
+        scrub_data.update(SCRUB_UNKNOWN)
+    scrub_data["incomplete"] = scrub_data["scrub_status"] in SCRUB_INCOMPLETE
+    if scrub_data["incomplete"] and not scrub_data["has_errors"]:
+        # No errors in what it covered, but it did not cover everything: not OK.
+        scrub_data["error_summary"] = f"{YELLOW}incomplete{RESET}"
     return scrub_data
 
 def parse_scrub_time_to_epoch(scrub_time):
@@ -584,8 +624,9 @@ Status = namedtuple('Status', 'rows running problems failures notes scrubs')
 
 def build_status(polled):
     """Status of poll_filesystems() output: table rows, running filesystems, whether problems
-    (device errors, scrub errors, missing devices) or failures (unreadable filesystems) were seen,
-    notes to show with the table, and the parsed scrub status per first mountpoint."""
+    (device errors, scrub errors, missing devices) or failures (unreadable filesystems, a scrub status
+    that could not be read, a scrub that did not complete) were seen, notes to show with the table, and
+    the parsed scrub status per first mountpoint."""
     rows, running, notes = [], [], []
     scrubs = {}
     problems = failures = False
@@ -602,6 +643,14 @@ def build_status(polled):
             running.append(fs)
         if missing or any(err_dict.values()) or scrub_data["has_errors"]:
             problems = True
+        mounts = ', '.join(fs['mounts'])
+        if scrub_data["scrub_status"] == "unknown":
+            notes.append(f"{YELLOW}Could not read the scrub status of {mounts}.{RESET}")
+            failures = True
+        elif scrub_data["incomplete"]:
+            notes.append(f"{YELLOW}The last scrub of {mounts} did not complete: continue it with "
+                         f"`btrfs scrub resume {fs['mounts'][0]}`.{RESET}")
+            failures = True
         rows.append([
             ", ".join(fs['mounts']),
             format_device_path(device_path, missing),
@@ -737,8 +786,13 @@ def scrub_filesystems(filesystems, args, screen):
     except KeyboardInterrupt:
         return scrub_interrupted(started, adopted, running | unconfirmed, queue)
 
-    if failed:
-        print(f"{RED}Scrubs finished; {len(failed)} could not be started.{RESET}")
+    mounts = [fs['mounts'][0] for fs in filesystems]
+    incomplete = [m for m in mounts if m not in failed and status.scrubs.get(m, SCRUB_UNKNOWN)["scrub_status"]
+                  in SCRUB_INCOMPLETE + ("unknown",)]
+    if failed or incomplete:
+        counts = [f"{len(failed)} could not be started"] if failed else []
+        counts += [f"{len(incomplete)} did not complete or could not be read"] if incomplete else []
+        print(f"{RED}Scrubs ended; {', '.join(counts)}.{RESET}")
     else:
         print(f"{GREEN}All scrubs finished.{RESET}")
     for fs in filesystems:
@@ -804,7 +858,8 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Check Btrfs filesystem status.",
         epilog="Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); "
-               "2 the check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted; "
+               "2 the check failed (no matching mounts, an unreadable filesystem, a scrub status that could not be "
+               "read, a scrub that did not complete, no root); 130 interrupted; "
                "141 the reader of stdout went away (| head).")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
