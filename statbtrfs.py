@@ -666,7 +666,8 @@ def check_skipped(skipped):
     if not unhealthy:
         return None
     return Status([row for st in unhealthy for row in st.rows], [], any(st.problems for st in unhealthy),
-                  any(st.failures for st in unhealthy), [note for st in unhealthy for note in st.notes], {})
+                  any(st.failures for st in unhealthy), unique([note for st in unhealthy for note in st.notes]),
+                  {mount: scrub for st in unhealthy for mount, scrub in st.scrubs.items()})
 
 def filter_recently_scrubbed(filesystems, exclude_recent_days):
     """Split filesystems into (kept, skipped): skipped finished a scrub within exclude_recent_days."""
@@ -725,7 +726,7 @@ def build_status(polled):
     rows, running, notes = [], [], []
     scrubs = {}
     problems = failures = False
-    unchecked = []  # mounts whose forced read-only state could not be read
+    unchecked = False  # mountinfo could not be read: no forced read-only state was checked
     untold = []     # filesystems that look forced read-only, which the check could not confirm
     for fs, filesystem_show, device_stats, scrub_output, forced in polled:
         uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
@@ -747,7 +748,7 @@ def build_status(polled):
                          f"after an error (\"forced readonly\" in `dmesg`). Once the cause is fixed, unmount and mount "
                          f"it again, or reboot: btrfs refuses a remount read-write after an error.{RESET}")
         elif forced is None:
-            unchecked.append(mounts)
+            unchecked = True
         elif forced == UNTOLD:
             untold.append(mounts)
         if scrub_data["scrub_status"] == "unknown":
@@ -773,8 +774,9 @@ def build_status(polled):
             scrub_data["error_summary"]
         ])
     if unchecked:
-        notes.append(f"{YELLOW}Could not read {PROC_MOUNTINFO}: not checked whether {'; '.join(unchecked)} "
-                     f"was forced read-only.{RESET}")
+        # One text for the run (merge_status drops a repeat): the unreadable file is one fact, not one per filesystem.
+        notes.append(f"{YELLOW}Could not read {PROC_MOUNTINFO}: not checked whether a filesystem was forced "
+                     f"read-only.{RESET}")
         failures = True
     if untold:
         notes.append(f"{YELLOW}{'; '.join(untold)}: read-only, though mounted read-write, and btrfs could not be "
@@ -782,12 +784,17 @@ def build_status(polled):
         failures = True
     return Status(rows, running, problems, failures, notes, scrubs)
 
+def unique(items):
+    """items without repeats, in order."""
+    seen = set()
+    return [item for item in items if not (item in seen or seen.add(item))]
+
 def merge_status(status, extra):
     """status with the rows, notes and verdicts of extra (a Status or None) added."""
     if extra is None:
         return status
     return Status(status.rows + extra.rows, status.running, status.problems or extra.problems,
-                  status.failures or extra.failures, status.notes + extra.notes, status.scrubs)
+                  status.failures or extra.failures, unique(status.notes + extra.notes), status.scrubs)
 
 def exit_code(problems, failures):
     # A health problem matters more than a filesystem we couldn't read.
@@ -957,9 +964,12 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
     mounts = [fs['mounts'][0] for fs in filesystems]
     incomplete = [m for m in mounts if m not in failed and status.scrubs.get(m, SCRUB_UNKNOWN)["scrub_status"]
                   in SCRUB_INCOMPLETE + ("unknown",)]
-    if failed or incomplete:
+    # Filesystems -d skipped that have a problem (their rows are in skipped): they set the exit code too.
+    attention = list(skipped.scrubs) if skipped is not None else []
+    if failed or incomplete or attention:
         counts = [f"{len(failed)} could not be started"] if failed else []
         counts += [f"{len(incomplete)} did not complete or could not be read"] if incomplete else []
+        counts += [f"{len(attention)} skipped by -d need attention"] if attention else []
         print(f"{RED}Scrubs ended; {', '.join(counts)}.{RESET}")
     else:
         print(f"{GREEN}All scrubs finished.{RESET}")
@@ -970,6 +980,8 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
         else:
             prefix = "was already running; " if mount in adopted else ""
             print(f"  {mount}: {prefix}{describe_scrub(status.scrubs.get(mount))}")
+    for mount in attention:
+        print(f"  {mount}: {RED}skipped by -d, but it has a problem: see the table above{RESET}")
     return exit_code(status.problems, status.failures or bool(failed))
 
 def watch_filesystems(filesystems, args, screen, skipped=None):
@@ -1043,7 +1055,8 @@ def build_parser():
     parser.add_argument(
         "-d",
         "--exclude-recent-scrubbed-days",
-        help="Exclude mounts scrubbed within this many days",
+        help="Leave out of the scrub, and of the table when healthy, mounts scrubbed within this many days; "
+             "they are still checked, and a problem in one is shown and counts in the exit code",
         default=0,
         type=int
     )

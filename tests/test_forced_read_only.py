@@ -159,7 +159,8 @@ def test_unreadable_mountinfo_says_it_was_not_checked(monkeypatch, capsys):
     _status(monkeypatch, "/mnt/a")
     install_mountinfo(monkeypatch, statbtrfs, None)
     assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
-    assert "not checked whether /mnt/a was forced read-only" in capsys.readouterr().out
+    assert "Could not read /proc/self/mountinfo: not checked whether a filesystem was forced read-only" in \
+        capsys.readouterr().out
 
 
 def test_watch_reports_a_filesystem_forced_read_only_during_the_run(monkeypatch):
@@ -338,3 +339,36 @@ def test_a_candidate_that_cannot_be_opened_leaves_it_to_the_filesystems_other_mo
 def test_a_filesystem_with_no_candidate_is_not_asked(monkeypatch):
     monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: pytest.fail("asked " + mount))
     assert statbtrfs.forced_state(_two_mounts(), set()) is False
+
+
+# --- the -s summary names what -d skipped, and the mountinfo note comes once ----------
+
+def test_scrub_summary_names_a_skipped_filesystem_whose_problem_sets_the_exit_code(monkeypatch, capsys):
+    class Fake(FakeBtrfs):
+        def _answer(self, command):  # /mnt/a has device errors
+            if command[:3] == ["btrfs", "device", "stats"] and command[-1] == "/mnt/a":
+                return list(STATS_NONZERO)
+            return super()._answer(command)
+
+    _recent(monkeypatch)
+    fake = Fake(["/mnt/a", "/mnt/b"], polls=1, finished=["/mnt/a"]).install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-d", "7", "--scrub_command_lockout", "0", "-i", "1"])
+    out = capsys.readouterr().out
+    assert [m for m, _ in fake.started] == ["/mnt/b"]          # /mnt/a is skipped
+    assert "All scrubs finished" not in out
+    assert "Scrubs ended; 1 skipped by -d need attention." in out
+    assert "/mnt/a: skipped by -d, but it has a problem: see the table above" in out
+    assert "/mnt/b: finished, OK" in out
+    assert code == statbtrfs.EXIT_PROBLEMS
+
+
+def test_unreadable_mountinfo_is_noted_once_per_run_with_d(monkeypatch, capsys):
+    _recent(monkeypatch)
+    install_status(monkeypatch, statbtrfs, {
+        "/mnt/a": (make_show(uuid_for(1)), STATS_ZERO, SCRUB_FINISHED_OK),   # skipped
+        "/mnt/b": (make_show(uuid_for(2)), STATS_ZERO, SCRUB_FINISHED_OK),   # skipped
+        "/mnt/c": (make_show(uuid_for(3)), STATS_ZERO, SCRUB_NEVER),         # kept
+    })
+    install_mountinfo(monkeypatch, statbtrfs, None)
+    assert _run(monkeypatch, ["-d", "7"]) == statbtrfs.EXIT_FAILURE
+    assert capsys.readouterr().out.count("Could not read /proc/self/mountinfo") == 1
