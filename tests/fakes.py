@@ -195,8 +195,9 @@ SCRUB_OLD_FINISHED_ERRORS = [
     "\tcorrected errors: 0, uncorrectable errors: 2, unverified errors: 0",
 ]
 
-# What a status reader gets when another reader holds the status file's lock (flock LOCK_EX|LOCK_NB). The
-# warning is on stderr, rc 1: execute_commands returns stdout, so statbtrfs sees the empty reply.
+# What a status reader gets when another reader holds the status file's lock (flock LOCK_EX|LOCK_NB): rc 1 and
+# the warning on stderr, which execute_commands (with_stdErr) returns, so the real reply is _WARNING. The empty
+# one stands for a command that printed nothing.
 SCRUB_FAILED_LOCKED = []
 SCRUB_FAILED_LOCKED_WARNING = ["WARNING: failed to open status file: Resource temporarily unavailable"]
 # Reading the progress failed part way, at the very end of a `-B` scrub started elsewhere: rc 0, a reply that reads

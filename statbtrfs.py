@@ -212,7 +212,8 @@ print = functools.partial(print, flush=True)
 
 EXIT_OK = 0        # healthy
 EXIT_PROBLEMS = 1  # device errors, scrub errors or missing devices found
-EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, no root
+EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, a scrub status that could not be read,
+                   # a scrub that did not complete, no root
 EXIT_INTERRUPTED = 130  # Ctrl-C
 EXIT_PIPE_CLOSED = 141  # the reader went away (`statbtrfs | head`): 128 + SIGPIPE, as a shell reports it, and as statblk does
 
@@ -717,6 +718,24 @@ def describe_scrub(scrub_data):
 # `interrupted`, which btrfs also prints for a moment as a scrub ends. They count only once they have held this long.
 SCRUB_HOLD_SECONDS = 10
 
+# A one-shot read can land on a reading that tells nothing: `unknown` (another reader holds btrfs scrub status's
+# lock on the status file, flock LOCK_EX|LOCK_NB, so the loser gets no reply) or `interrupted` (printed for about
+# a millisecond as a scrub ends). Both measured on EL7 (btrfs-progs 4.9.1): a collision in 3.7-4% of two status
+# reads started together, a lone `interrupted` once in ~20,000 reads. Both last about 1 ms, so the next read is
+# clean; three reads cap the cost of a real failure (an unreadable status, a scrub that stays interrupted) at
+# 1.5 s per run.
+REREAD_COUNT = 3
+REREAD_SECONDS = 0.5
+
+def reread_unclear(filesystems, status, unclear=("unknown", "interrupted")):
+    """status, read again while any scrub reading is one of unclear (up to REREAD_COUNT times)."""
+    for _ in range(REREAD_COUNT):
+        if not any(scrub["scrub_status"] in unclear for scrub in status.scrubs.values()):
+            break
+        time.sleep(REREAD_SECONDS)
+        status = build_status(poll_filesystems(filesystems))
+    return status
+
 def held_scrubs(mounts, status, since, seen_running):
     """Those of mounts to treat as running: their reading is one of the above and has not held long enough.
 
@@ -810,14 +829,15 @@ def watch_filesystems(filesystems, args, screen):
     seen_running = set()
     since = {}
     try:
+        status = reread_unclear(filesystems, build_status(poll_filesystems(filesystems)), ("interrupted",))
         while True:
-            status = build_status(poll_filesystems(filesystems))
             seen_running.update(fs['mounts'][0] for fs in status.running)
             held = held_scrubs(mounts, status, since, seen_running)
             screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
             if not status.running and not held:
                 return exit_code(status.problems, status.failures)
             time.sleep(args.interval)
+            status = build_status(poll_filesystems(filesystems))
     except KeyboardInterrupt:
         print()
         return EXIT_INTERRUPTED
@@ -940,7 +960,7 @@ def run():
     if args.watch:
         return watch_filesystems(filesystems, args, screen)
 
-    status = build_status(poll_filesystems(filesystems))
+    status = reread_unclear(filesystems, build_status(poll_filesystems(filesystems)))
     screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
     return exit_code(status.problems, status.failures)
 

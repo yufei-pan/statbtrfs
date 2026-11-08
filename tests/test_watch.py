@@ -52,10 +52,19 @@ def test_watch_survives_a_failed_status_read(monkeypatch):
 
 
 def test_watch_does_not_hold_for_an_interrupted_scrub_of_long_ago(monkeypatch):
-    fake = FakeBtrfs(["/mnt/a"], replies={"/mnt/a": [SCRUB_OLD_INTERRUPTED]}).install(monkeypatch, statbtrfs)
-    # It does not wait for it, but the last scrub did not complete: not healthy.
+    fake = FakeBtrfs(["/mnt/a"], replies={"/mnt/a": [SCRUB_OLD_INTERRUPTED] * 9}).install(monkeypatch, statbtrfs)
+    # It does not hold for it, but the last scrub did not complete: not healthy. Its first poll reads again
+    # (the interrupted of a scrub's end lasts a millisecond), 3 times.
     assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_FAILURE
-    assert fake.status_polls == 1
+    assert fake.status_polls == 4
+    assert fake.clock == 1_000_000.0 + 3 * statbtrfs.REREAD_SECONDS
+
+
+def test_watch_first_poll_on_the_moment_a_scrub_ends_reads_again(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a"], finished=["/mnt/a"], replies={"/mnt/a": [SCRUB_OLD_INTERRUPTED]},
+                     old_progs=True).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-w"]) == statbtrfs.EXIT_OK
+    assert fake.status_polls == 2
 
 
 def test_watch_ending_on_a_failed_status_read_exits_2(monkeypatch):

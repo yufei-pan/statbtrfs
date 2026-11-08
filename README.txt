@@ -43,8 +43,10 @@ Upgrading to 0.41 from 0.40:
     completes.
   - A scrub status that could not be read (`unknown`: another reader held the status file's lock, or the read
     failed) now exits 2 with the note "Could not read the scrub status of <mount>." In -s and -w that is only
-    when it is still unreadable once the run ends (a reading like this holds a run for 10 s, as in 0.40);
-    without -s a status read that collides with another reader exits 2 where 0.40 exited 0.
+    when it is still unreadable once the run ends (a reading like this holds a run for 10 s, as in 0.40).
+    Without -s, a status that could not be read, or that reads `interrupted` (as one does for a millisecond as a
+    scrub ends), is read again, up to 3 times 0.5 s apart, so a collision with another reader does not exit 2;
+    -w's first poll does the same for `interrupted`.
   - btrfs's stderr now reaches the parsers, after its stdout. A status read that failed part way, which
     btrfs-progs report only there and with exit 0 (seen at the very end of a `btrfs scrub start -B` started
     elsewhere), reads as unknown instead of Never, so -s and -w read on to the finished record and its errors.
