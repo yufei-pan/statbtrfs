@@ -10,6 +10,7 @@ from fakes import (
     SCRUB_FINISHED_OK,
     SCRUB_NEVER,
     SCRUB_OLD_INTERRUPTED,
+    SHOW_INCOMPLETE,
     STATS_NONZERO,
     STATS_ZERO,
     install_mountinfo,
@@ -356,7 +357,7 @@ def test_scrub_summary_names_a_skipped_filesystem_whose_problem_sets_the_exit_co
     out = capsys.readouterr().out
     assert [m for m, _ in fake.started] == ["/mnt/b"]          # /mnt/a is skipped
     assert "All scrubs finished" not in out
-    assert "Scrubs ended; 1 skipped by -d need attention." in out
+    assert "Scrubs ended; 1 skipped by -d needs attention." in out
     assert "/mnt/a: skipped by -d, but it has a problem: see the table above" in out
     assert "/mnt/b: finished, OK" in out
     assert code == statbtrfs.EXIT_PROBLEMS
@@ -377,17 +378,20 @@ def test_unreadable_mountinfo_is_noted_once_per_run_with_d(monkeypatch, capsys):
 # --- the -s summary never shows a green line over a failing exit code --------------------
 
 class _Fake(FakeBtrfs):
-    """/mnt/a: device errors (stats_a) or a `btrfs filesystem show` that says nothing (show_a=False)."""
+    """/mnt/a: device errors (stats_a), from its ``stats_from``th `btrfs device stats` on (1: always), or a
+    `btrfs filesystem show` that answers show_a (a list; False: nothing)."""
 
-    def __init__(self, *args, stats_a=None, show_a=True, **kwargs):
+    def __init__(self, *args, stats_a=None, stats_from=1, show_a=True, bad=("/mnt/a",), **kwargs):
         super().__init__(*args, **kwargs)
-        self.stats_a, self.show_a = stats_a, show_a
+        self.stats_a, self.stats_from, self.show_a, self.stats_asked, self.bad = stats_a, stats_from, show_a, 0, bad
 
     def _answer(self, command):
-        if command[-1] == "/mnt/a" and command[:3] == ["btrfs", "device", "stats"] and self.stats_a:
-            return list(self.stats_a)
-        if command[-1] == "/mnt/a" and command[:3] == ["btrfs", "filesystem", "show"] and not self.show_a:
-            return []
+        if command[-1] in self.bad and command[:3] == ["btrfs", "device", "stats"] and self.stats_a:
+            self.stats_asked += 1
+            if self.stats_asked >= self.stats_from:
+                return list(self.stats_a)
+        if command[-1] == "/mnt/a" and command[:3] == ["btrfs", "filesystem", "show"] and self.show_a is not True:
+            return list(self.show_a or [])
         return super()._answer(command)
 
 
@@ -402,9 +406,10 @@ def test_scrub_summary_with_a_kept_filesystem_that_has_device_errors_is_not_gree
     assert "Scrubs ended; problems found: see the table and notes above." in out
 
 
-def test_scrub_summary_with_a_skipped_filesystem_that_cannot_be_read_is_not_green(monkeypatch, capsys):
+@pytest.mark.parametrize("show", [False, SHOW_INCOMPLETE], ids=["empty", "incomplete"])
+def test_scrub_summary_with_a_skipped_filesystem_that_cannot_be_read_is_not_green(monkeypatch, capsys, show):
     _recent(monkeypatch)
-    _Fake(["/mnt/a", "/mnt/b"], polls=1, finished=["/mnt/a"], show_a=False).install(monkeypatch, statbtrfs)
+    _Fake(["/mnt/a", "/mnt/b"], polls=1, finished=["/mnt/a"], show_a=show).install(monkeypatch, statbtrfs)
     assert _run(monkeypatch, ["-d", "7"] + _SCRUB) == statbtrfs.EXIT_FAILURE
     out = capsys.readouterr().out
     assert "Could not fetch complete info for /mnt/a" in out
@@ -417,3 +422,39 @@ def test_scrub_summary_of_healthy_filesystems_is_green(monkeypatch, capsys):
     FakeBtrfs(["/mnt/a", "/mnt/b"], polls=1).install(monkeypatch, statbtrfs)
     assert _run(monkeypatch, _SCRUB) == statbtrfs.EXIT_OK
     assert "All scrubs finished." in capsys.readouterr().out
+
+
+# --- the filesystems -d skipped are checked again at the end of a long run ------------------
+
+def test_scrub_checks_the_skipped_filesystems_again_at_the_end(monkeypatch, capsys):
+    # /mnt/a is healthy at the start, and has device errors by the time the scrub of /mnt/b is over.
+    _recent(monkeypatch)
+    _Fake(["/mnt/a", "/mnt/b"], polls=3, finished=["/mnt/a"], stats_a=STATS_NONZERO, stats_from=2).install(
+        monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-d", "7"] + _SCRUB)
+    out = capsys.readouterr().out
+    assert code == statbtrfs.EXIT_PROBLEMS
+    assert "All scrubs finished" not in out
+    assert "/mnt/a: skipped by -d, but it has a problem" in out
+    assert "Scrubs ended; 1 skipped by -d needs attention." in out
+
+
+def test_watch_checks_the_skipped_filesystems_again_at_the_end(monkeypatch):
+    _recent(monkeypatch)
+    _Fake(["/mnt/a", "/mnt/b"], polls=3, running=["/mnt/b"], finished=["/mnt/a"], stats_a=STATS_NONZERO,
+          stats_from=2).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-d", "7", "-w", "-i", "1"]) == statbtrfs.EXIT_PROBLEMS
+
+
+def test_watch_with_skipped_filesystems_that_stay_healthy_exits_0(monkeypatch):
+    _recent(monkeypatch)
+    _Fake(["/mnt/a", "/mnt/b"], polls=3, running=["/mnt/b"], finished=["/mnt/a"]).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-d", "7", "-w", "-i", "1"]) == statbtrfs.EXIT_OK
+
+
+def test_the_summary_counts_skipped_filesystems_in_the_plural(monkeypatch, capsys):
+    _recent(monkeypatch)
+    _Fake(["/mnt/a", "/mnt/b", "/mnt/c"], polls=1, finished=["/mnt/a", "/mnt/b"], stats_a=STATS_NONZERO,
+          bad=("/mnt/a", "/mnt/b")).install(monkeypatch, statbtrfs)
+    _run(monkeypatch, ["-d", "7"] + _SCRUB)
+    assert "2 skipped by -d need attention" in capsys.readouterr().out

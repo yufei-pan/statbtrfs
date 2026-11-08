@@ -669,6 +669,13 @@ def check_skipped(skipped):
                   any(st.failures for st in unhealthy), unique([note for st in unhealthy for note in st.notes]),
                   {mount: scrub for st in unhealthy for mount, scrub in st.scrubs.items()})
 
+def recheck_skipped(skipped_filesystems, before):
+    """check_skipped() again, at the end of a run that may have lasted hours: (status, changed from before)."""
+    now = check_skipped(skipped_filesystems)
+    unchanged = (now is None and before is None) or (
+        now is not None and before is not None and (now.rows, now.notes) == (before.rows, before.notes))
+    return now, not unchanged
+
 def filter_recently_scrubbed(filesystems, exclude_recent_days):
     """Split filesystems into (kept, skipped): skipped finished a scrub within exclude_recent_days."""
     if exclude_recent_days <= 0:
@@ -898,7 +905,7 @@ def held_scrubs(mounts, status, since, seen_running):
             held.add(mount)
     return held
 
-def scrub_filesystems(filesystems, args, screen, skipped=None):
+def scrub_filesystems(filesystems, args, screen, skipped=None, skipped_filesystems=()):
     """-s: start scrubs in mountpoint order, keeping at most -m running, until every filesystem
     has been scrubbed. Prints a per-filesystem summary and returns the exit code."""
     max_running = args.max_scrub_count if args.max_scrub_count >= 1 else os.cpu_count()
@@ -946,7 +953,8 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
             start_next()
         time.sleep(args.interval)
         while True:
-            status = merge_status(build_status(poll_filesystems(filesystems)), skipped)
+            kept = build_status(poll_filesystems(filesystems))
+            status = merge_status(kept, skipped)
             ours = started + adopted
             running = {fs['mounts'][0] for fs in status.running} | held_scrubs(ours, status, since, ours)
             unconfirmed.clear()
@@ -961,6 +969,11 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
     except KeyboardInterrupt:
         return scrub_interrupted(started, adopted, running | unconfirmed, queue, via)
 
+    # The filesystems -d skipped are checked again: the run may have lasted hours.
+    skipped, changed = recheck_skipped(skipped_filesystems, skipped)
+    if changed:
+        status = merge_status(kept, skipped)
+        screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
     mounts = [fs['mounts'][0] for fs in filesystems]
     incomplete = [m for m in mounts if m not in failed and status.scrubs.get(m, SCRUB_UNKNOWN)["scrub_status"]
                   in SCRUB_INCOMPLETE + ("unknown",)]
@@ -970,7 +983,7 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
     if code or failed or incomplete or attention:  # never a green line over a failing exit code
         counts = [f"{len(failed)} could not be started"] if failed else []
         counts += [f"{len(incomplete)} did not complete or could not be read"] if incomplete else []
-        counts += [f"{len(attention)} skipped by -d need attention"] if attention else []
+        counts += [f"{len(attention)} skipped by -d {'needs' if len(attention) == 1 else 'need'} attention"] if attention else []
         counts = counts or (["problems found: see the table and notes above"] if code == EXIT_PROBLEMS
                             else ["some checks could not be made: see the notes above"])
         print(f"{RED}Scrubs ended; {', '.join(counts)}.{RESET}")
@@ -987,22 +1000,28 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
         print(f"  {mount}: {RED}skipped by -d, but it has a problem: see the table above{RESET}")
     return code
 
-def watch_filesystems(filesystems, args, screen, skipped=None):
+def watch_filesystems(filesystems, args, screen, skipped=None, skipped_filesystems=()):
     """-w: refresh the table until no scrub is running; never starts one. Returns the exit code."""
     mounts = [fs['mounts'][0] for fs in filesystems]
     seen_running = set()
     since = {}
     try:
-        status = merge_status(
-            reread_unclear(filesystems, build_status(poll_filesystems(filesystems)), ("interrupted",)), skipped)
+        kept = reread_unclear(filesystems, build_status(poll_filesystems(filesystems)), ("interrupted",))
+        status = merge_status(kept, skipped)
         while True:
             seen_running.update(fs['mounts'][0] for fs in status.running)
             held = held_scrubs(mounts, status, since, seen_running)
             screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
             if not status.running and not held:
+                # The filesystems -d skipped are checked again: the run may have lasted hours.
+                skipped, changed = recheck_skipped(skipped_filesystems, skipped)
+                if changed:
+                    status = merge_status(kept, skipped)
+                    screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
                 return exit_code(status.problems, status.failures)
             time.sleep(args.interval)
-            status = merge_status(build_status(poll_filesystems(filesystems)), skipped)
+            kept = build_status(poll_filesystems(filesystems))
+            status = merge_status(kept, skipped)
     except KeyboardInterrupt:
         print()
         return EXIT_INTERRUPTED
@@ -1128,9 +1147,9 @@ def run():
         return EXIT_OK
 
     if args.scrub:
-        return scrub_filesystems(filesystems, args, screen, skipped_status)
+        return scrub_filesystems(filesystems, args, screen, skipped_status, skipped)
     if args.watch:
-        return watch_filesystems(filesystems, args, screen, skipped_status)
+        return watch_filesystems(filesystems, args, screen, skipped_status, skipped)
 
     status = merge_status(reread_unclear(filesystems, build_status(poll_filesystems(filesystems))), skipped_status)
     screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
