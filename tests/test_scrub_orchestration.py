@@ -18,7 +18,12 @@ from fakes import (
     SCRUB_OLD_INTERRUPTED,
     SCRUB_OLD_RUNNING,
     SCRUB_RUNNING,
+    SCRUB_FINISHED_OK,
+    STATS_ZERO,
     FakeBtrfs,
+    install_status,
+    make_show,
+    uuid_for,
 )
 
 # The unguarded function (conftest wraps statbtrfs.run_detached to block real btrfs commands).
@@ -108,6 +113,39 @@ def test_start_scrub_is_read_only_on_a_read_only_mount(monkeypatch):
     assert statbtrfs.start_scrub("/mnt/ro")[0] == "started"
     assert statbtrfs.start_scrub("/mnt/rw")[0] == "started"
     assert seen == [["btrfs", "scrub", "start", "-r", "/mnt/ro"], ["btrfs", "scrub", "start", "/mnt/rw"]]
+
+
+def _scrub_one_filesystem(monkeypatch, capsys, read_only):
+    """-s on one filesystem mounted at /mnt/a and /mnt/b; the commands `btrfs scrub start` was given."""
+    _mounted(monkeypatch, read_only=read_only)
+    show = make_show(uuid_for(1))
+    install_status(monkeypatch, statbtrfs, {m: (show, STATS_ZERO, SCRUB_FINISHED_OK) for m in ("/mnt/a", "/mnt/b")})
+    monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: None)
+    seen = []
+    monkeypatch.setattr(statbtrfs, "run_detached", lambda cmd: seen.append(cmd) or (0, "scrub started"))
+    _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"])
+    return seen, capsys.readouterr().out
+
+
+def test_scrub_goes_through_the_first_mount_that_is_not_read_only(monkeypatch, capsys):
+    # A read-only scrub repairs nothing: with a read-write mount of the filesystem, use that one.
+    seen, out = _scrub_one_filesystem(monkeypatch, capsys, read_only={"/mnt/a"})
+    assert seen == [["btrfs", "scrub", "start", "/mnt/b"]]
+    assert "Started scrub on /mnt/a" in out and "read-only" not in out
+
+
+def test_scrub_is_read_only_only_when_every_mount_is(monkeypatch, capsys):
+    seen, out = _scrub_one_filesystem(monkeypatch, capsys, read_only={"/mnt/a", "/mnt/b"})
+    assert seen == [["btrfs", "scrub", "start", "-r", "/mnt/a"]]
+    assert "Started read-only scrub (repairs nothing) on /mnt/a" in out
+
+
+def test_the_resume_note_goes_through_the_mount_that_is_not_read_only(monkeypatch, capsys):
+    _mounted(monkeypatch, read_only={"/mnt/a"})
+    aborted = (make_show(uuid_for(1)), STATS_ZERO, SCRUB_OLD_ABORTED)
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": aborted, "/mnt/b": aborted})
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    assert "continue it with `btrfs scrub resume /mnt/b`." in capsys.readouterr().out
 
 
 def test_start_scrub_leaves_a_mount_it_cannot_ask_to_btrfs(monkeypatch):

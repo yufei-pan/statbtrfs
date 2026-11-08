@@ -650,7 +650,7 @@ def build_status(polled):
             failures = True
         elif scrub_data["incomplete"]:
             notes.append(f"{YELLOW}The last scrub of {mounts} did not complete: continue it with "
-                         f"`{' '.join(scrub_command('resume', fs['mounts'][0]))}`.{RESET}")
+                         f"`{' '.join(scrub_command('resume', scrub_mount(fs)))}`.{RESET}")
             failures = True
         rows.append([
             ", ".join(fs['mounts']),
@@ -700,6 +700,12 @@ def is_read_only(mount):
         return bool(os.statvfs(mount).f_flag & os.ST_RDONLY)
     except OSError:
         return False
+
+def scrub_mount(fs):
+    """The mount of filesystem fs to run scrub start|resume through: the first that is not read-only, as a
+    read-only scrub repairs nothing, and the first of all (so `-r`) only when every mount is read-only. The first
+    mount stays the filesystem's identity for status, holds and the summary."""
+    return next((mount for mount in fs['mounts'] if not is_read_only(mount)), fs['mounts'][0])
 
 def scrub_command(verb, mount):
     """`btrfs scrub start|resume`, read-only (-r) on a read-only mount, where nothing could be repaired anyway."""
@@ -773,6 +779,7 @@ def scrub_filesystems(filesystems, args, screen):
     started = []      # mounts this run started
     adopted = []      # mounts that were already running when we tried
     failed = {}       # mount -> why the start failed
+    via = {}          # mount -> the mount of that filesystem its scrub was started through, for scrub_interrupted()
     unconfirmed = set()  # started since the last poll, not seen running yet
     running = set()
     since = {}        # for held_scrubs()
@@ -782,8 +789,10 @@ def scrub_filesystems(filesystems, args, screen):
     def start_next():
         nonlocal last_start
         while queue:
-            mount = queue.pop(0)['mounts'][0]
-            state, message = start_scrub(mount)
+            fs = queue.pop(0)
+            mount = fs['mounts'][0]
+            via[mount] = scrub_mount(fs)
+            state, message = start_scrub(via[mount])
             if state == 'failed':
                 failed[mount] = message
                 screen.event(f"{RED}Could not start scrub on {mount}: {message}{RESET}")
@@ -791,7 +800,8 @@ def scrub_filesystems(filesystems, args, screen):
             if state == 'started':
                 started.append(mount)
                 unconfirmed.add(mount)
-                screen.event(f"{YELLOW}Started scrub on {mount}{RESET}")
+                kind = "read-only scrub (repairs nothing)" if is_read_only(via[mount]) else "scrub"
+                screen.event(f"{YELLOW}Started {kind} on {mount}{RESET}")
             else:
                 adopted.append(mount)
                 screen.event(f"{YELLOW}Scrub already running on {mount}; counting it as running{RESET}")
@@ -816,7 +826,7 @@ def scrub_filesystems(filesystems, args, screen):
                 break
             time.sleep(args.interval)
     except KeyboardInterrupt:
-        return scrub_interrupted(started, adopted, running | unconfirmed, queue)
+        return scrub_interrupted(started, adopted, running | unconfirmed, queue, via)
 
     mounts = [fs['mounts'][0] for fs in filesystems]
     incomplete = [m for m in mounts if m not in failed and status.scrubs.get(m, SCRUB_UNKNOWN)["scrub_status"]
@@ -855,9 +865,10 @@ def watch_filesystems(filesystems, args, screen):
         print()
         return EXIT_INTERRUPTED
 
-def scrub_interrupted(started, adopted, running, queue):
+def scrub_interrupted(started, adopted, running, queue, via):
     """Ctrl-C during -s. Scrubs keep running (they run in their own session) unless the user,
-    asked on a terminal, cancels the ones this run started."""
+    asked on a terminal, cancels the ones this run started. via maps a mount to the mount of its filesystem
+    the scrub was started through (the resume advice names that one)."""
     ours = [mount for mount in started if mount in running]
     elsewhere = [mount for mount in adopted if mount in running]
     print()
@@ -879,7 +890,7 @@ def scrub_interrupted(started, adopted, running, queue):
             for mount in ours:
                 cancel_scrub(mount)
                 print(f"Cancelled scrub on {mount}: it keeps its progress, continue it with "
-                      f"`{' '.join(scrub_command('resume', mount))}`.")
+                      f"`{' '.join(scrub_command('resume', via[mount]))}`.")
             return EXIT_INTERRUPTED
     if ours or elsewhere:
         print("Scrubs keep running in the background. Stop one with `btrfs scrub cancel <mount>`; "

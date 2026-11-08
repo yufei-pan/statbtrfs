@@ -38,7 +38,8 @@ Upgrading to 0.42 from 0.41:
     nothing, so the run completes and exits 0 (1 if it finds errors). 0.41 started a read-write scrub, which btrfs
     aborts at once there, so it ended "did not complete" with exit 2. A read-write mount still scrubs read-write.
     The mount is asked with statvfs(); when it can't be asked, the scrub starts as before. On a filesystem
-    with several mounts, -s scrubs through the first in sort order, so it is read-only when that mount is.
+    with several mounts, -s scrubs through the first one in sort order that is not read-only (it repairs), and
+    read-only only when every mount of the filesystem is; the run says "read-only scrub (repairs nothing)".
   - Advice to resume a scrub that did not complete says `btrfs scrub resume -r <mount>` on a read-only mount:
     a plain resume is aborted there too, as btrfs does not keep -r for a resume.
 
