@@ -33,6 +33,15 @@ head).
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
+Upgrading to 0.42 from 0.41:
+  - -s on a read-only mount now starts a read-only scrub (`btrfs scrub start -r`), which checks it and repairs
+    nothing, so the run completes and exits 0 (1 if it finds errors). 0.41 started a read-write scrub, which btrfs
+    aborts at once there, so it ended "did not complete" with exit 2. A read-write mount still scrubs read-write.
+    The mount is asked with statvfs(); when it can't be asked, the scrub starts as before. On a filesystem
+    with several mounts, -s scrubs through the first in sort order, so it is read-only when that mount is.
+  - Advice to resume a scrub that did not complete says `btrfs scrub resume -r <mount>` on a read-only mount:
+    a plain resume is aborted there too, as btrfs does not keep -r for a resume.
+
 Upgrading to 0.41 from 0.40:
   - A scrub that did not complete (`aborted`: cancelled, or a read-only mount; `interrupted`: its process was
     killed) no longer reads OK: its error_summary shows `incomplete` (errors it found still show, and exit 1),

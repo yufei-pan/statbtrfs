@@ -650,7 +650,7 @@ def build_status(polled):
             failures = True
         elif scrub_data["incomplete"]:
             notes.append(f"{YELLOW}The last scrub of {mounts} did not complete: continue it with "
-                         f"`btrfs scrub resume {fs['mounts'][0]}`.{RESET}")
+                         f"`{' '.join(scrub_command('resume', fs['mounts'][0]))}`.{RESET}")
             failures = True
         rows.append([
             ", ".join(fs['mounts']),
@@ -692,11 +692,24 @@ def run_detached(command):
         output.seek(0)
         return returncode, output.read().decode('utf-8', 'replace').strip()
 
+def is_read_only(mount):
+    """Whether mount is mounted read-only. There btrfs aborts a read-write scrub at once, start and resume alike
+    (the status file keeps no -r for a resume to reuse): only `-r` scrubs it. A mount that can't be asked is
+    left to btrfs, which reports it."""
+    try:
+        return bool(os.statvfs(mount).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+def scrub_command(verb, mount):
+    """`btrfs scrub start|resume`, read-only (-r) on a read-only mount, where nothing could be repaired anyway."""
+    return ['btrfs', 'scrub', verb] + (['-r'] if is_read_only(mount) else []) + [mount]
+
 def start_scrub(mount):
     """Start a background scrub: ('started' | 'running' | 'failed', message).
 
     'running' means a scrub was already running on the filesystem (started elsewhere)."""
-    returncode, output = run_detached(['btrfs', 'scrub', 'start', mount])
+    returncode, output = run_detached(scrub_command('start', mount))
     if returncode == 0:
         return 'started', output
     if 'already running' in output.lower():
@@ -865,12 +878,12 @@ def scrub_interrupted(started, adopted, running, queue):
         if answer.strip().lower() in ("y", "yes"):
             for mount in ours:
                 cancel_scrub(mount)
-                print(f"Cancelled scrub on {mount}")
-            print("A cancelled scrub keeps its progress: continue it with `btrfs scrub resume <mount>`.")
+                print(f"Cancelled scrub on {mount}: it keeps its progress, continue it with "
+                      f"`{' '.join(scrub_command('resume', mount))}`.")
             return EXIT_INTERRUPTED
     if ours or elsewhere:
         print("Scrubs keep running in the background. Stop one with `btrfs scrub cancel <mount>`; "
-              "continue a cancelled one with `btrfs scrub resume <mount>`.")
+              "continue a cancelled one with `btrfs scrub resume <mount>` (`-r` on a read-only mount).")
     return EXIT_INTERRUPTED
 
 
