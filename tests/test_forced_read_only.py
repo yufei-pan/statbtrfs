@@ -372,3 +372,47 @@ def test_unreadable_mountinfo_is_noted_once_per_run_with_d(monkeypatch, capsys):
     install_mountinfo(monkeypatch, statbtrfs, None)
     assert _run(monkeypatch, ["-d", "7"]) == statbtrfs.EXIT_FAILURE
     assert capsys.readouterr().out.count("Could not read /proc/self/mountinfo") == 1
+
+
+# --- the -s summary never shows a green line over a failing exit code --------------------
+
+class _Fake(FakeBtrfs):
+    """/mnt/a: device errors (stats_a) or a `btrfs filesystem show` that says nothing (show_a=False)."""
+
+    def __init__(self, *args, stats_a=None, show_a=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stats_a, self.show_a = stats_a, show_a
+
+    def _answer(self, command):
+        if command[-1] == "/mnt/a" and command[:3] == ["btrfs", "device", "stats"] and self.stats_a:
+            return list(self.stats_a)
+        if command[-1] == "/mnt/a" and command[:3] == ["btrfs", "filesystem", "show"] and not self.show_a:
+            return []
+        return super()._answer(command)
+
+
+_SCRUB = ["-s", "--scrub_command_lockout", "0", "-i", "1"]
+
+
+def test_scrub_summary_with_a_kept_filesystem_that_has_device_errors_is_not_green(monkeypatch, capsys):
+    _Fake(["/mnt/a"], polls=1, stats_a=STATS_NONZERO).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, _SCRUB) == statbtrfs.EXIT_PROBLEMS
+    out = capsys.readouterr().out
+    assert "All scrubs finished" not in out
+    assert "Scrubs ended; problems found: see the table and notes above." in out
+
+
+def test_scrub_summary_with_a_skipped_filesystem_that_cannot_be_read_is_not_green(monkeypatch, capsys):
+    _recent(monkeypatch)
+    _Fake(["/mnt/a", "/mnt/b"], polls=1, finished=["/mnt/a"], show_a=False).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, ["-d", "7"] + _SCRUB) == statbtrfs.EXIT_FAILURE
+    out = capsys.readouterr().out
+    assert "Could not fetch complete info for /mnt/a" in out
+    assert "All scrubs finished" not in out
+    assert "Scrubs ended; problems found: see the table and notes above." in out
+
+
+def test_scrub_summary_of_healthy_filesystems_is_green(monkeypatch, capsys):
+    FakeBtrfs(["/mnt/a", "/mnt/b"], polls=1).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, _SCRUB) == statbtrfs.EXIT_OK
+    assert "All scrubs finished." in capsys.readouterr().out

@@ -966,10 +966,12 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
                   in SCRUB_INCOMPLETE + ("unknown",)]
     # Filesystems -d skipped that have a problem (their rows are in skipped): they set the exit code too.
     attention = list(skipped.scrubs) if skipped is not None else []
-    if failed or incomplete or attention:
+    code = exit_code(status.problems, status.failures or bool(failed))
+    if code or failed or incomplete or attention:  # never a green line over a failing exit code
         counts = [f"{len(failed)} could not be started"] if failed else []
         counts += [f"{len(incomplete)} did not complete or could not be read"] if incomplete else []
         counts += [f"{len(attention)} skipped by -d need attention"] if attention else []
+        counts = counts or ["problems found: see the table and notes above"]
         print(f"{RED}Scrubs ended; {', '.join(counts)}.{RESET}")
     else:
         print(f"{GREEN}All scrubs finished.{RESET}")
@@ -982,7 +984,7 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
             print(f"  {mount}: {prefix}{describe_scrub(status.scrubs.get(mount))}")
     for mount in attention:
         print(f"  {mount}: {RED}skipped by -d, but it has a problem: see the table above{RESET}")
-    return exit_code(status.problems, status.failures or bool(failed))
+    return code
 
 def watch_filesystems(filesystems, args, screen, skipped=None):
     """-w: refresh the table until no scrub is running; never starts one. Returns the exit code."""
