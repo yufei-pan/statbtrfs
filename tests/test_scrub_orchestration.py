@@ -131,13 +131,13 @@ def test_scrub_goes_through_the_first_mount_that_is_not_read_only(monkeypatch, c
     # A read-only scrub repairs nothing: with a read-write mount of the filesystem, use that one.
     seen, out = _scrub_one_filesystem(monkeypatch, capsys, read_only={"/mnt/a"})
     assert seen == [["btrfs", "scrub", "start", "/mnt/b"]]
-    assert "Started scrub on /mnt/a" in out and "read-only" not in out
+    assert "Started scrub on /mnt/a (through /mnt/b)" in out and "read-only" not in out
 
 
 def test_scrub_is_read_only_only_when_every_mount_is(monkeypatch, capsys):
     seen, out = _scrub_one_filesystem(monkeypatch, capsys, read_only={"/mnt/a", "/mnt/b"})
     assert seen == [["btrfs", "scrub", "start", "-r", "/mnt/a"]]
-    assert "Started read-only scrub (repairs nothing) on /mnt/a" in out
+    assert "Started read-only scrub (repairs nothing) on /mnt/a\n" in out
 
 
 def test_the_resume_note_goes_through_the_mount_that_is_not_read_only(monkeypatch, capsys):
@@ -493,6 +493,26 @@ def test_ctrl_c_cancel_names_each_resume_read_only_where_mounted_read_only(monke
     out = capsys.readouterr().out
     assert "Cancelled scrub on /mnt/a: it keeps its progress, continue it with `btrfs scrub resume /mnt/a`." in out
     assert "Cancelled scrub on /mnt/b: it keeps its progress, continue it with `btrfs scrub resume -r /mnt/b`." in out
+
+
+def test_ctrl_c_cancel_names_the_resume_through_the_mount_that_is_not_read_only(monkeypatch, capsys):
+    # One filesystem at /mnt/a (read-only, sorts first) and /mnt/b: the scrub went through /mnt/b, so does the advice.
+    _mounted(monkeypatch, read_only={"/mnt/a"})
+    _interactive(monkeypatch, "y")
+    show = make_show(uuid_for(1))
+    install_status(monkeypatch, statbtrfs, {m: (show, STATS_ZERO, SCRUB_RUNNING) for m in ("/mnt/a", "/mnt/b")})
+    monkeypatch.setattr(statbtrfs, "run_detached", lambda cmd: (0, "scrub started"))
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(statbtrfs.time, "sleep", sleep)
+    assert _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"]) == statbtrfs.EXIT_INTERRUPTED
+    out = capsys.readouterr().out
+    assert "Cancelled scrub on /mnt/a: it keeps its progress, continue it with `btrfs scrub resume /mnt/b`." in out
 
 
 @pytest.mark.parametrize("answer", ["", "n", "no", "anything"])

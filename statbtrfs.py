@@ -801,7 +801,8 @@ def scrub_filesystems(filesystems, args, screen):
                 started.append(mount)
                 unconfirmed.add(mount)
                 kind = "read-only scrub (repairs nothing)" if is_read_only(via[mount]) else "scrub"
-                screen.event(f"{YELLOW}Started {kind} on {mount}{RESET}")
+                through = f" (through {via[mount]})" if via[mount] != mount else ""
+                screen.event(f"{YELLOW}Started {kind} on {mount}{through}{RESET}")
             else:
                 adopted.append(mount)
                 screen.event(f"{YELLOW}Scrub already running on {mount}; counting it as running{RESET}")
