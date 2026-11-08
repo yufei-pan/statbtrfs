@@ -720,8 +720,8 @@ SCRUB_HOLD_SECONDS = 10
 
 # A one-shot read can land on a reading that tells nothing: `unknown` (another reader holds btrfs scrub status's
 # lock on the status file, flock LOCK_EX|LOCK_NB, so the loser gets no reply) or `interrupted` (printed for about
-# a millisecond as a scrub ends). Both measured on EL7 (btrfs-progs 4.9.1): a collision in 3.7-4% of two status
-# reads started together, a lone `interrupted` once in ~20,000 reads. Both last about 1 ms, so the next read is
+# a millisecond as a scrub ends). Both measured on EL7 (btrfs-progs 4.9.1): a collision in 3.7-4% of pairs of
+# statbtrfs runs started together, a lone `interrupted` once in ~20,000 reads. Both last about 1 ms, so the next read is
 # clean; three reads cap the cost of a real failure (an unreadable status, a scrub that stays interrupted) at
 # 1.5 s per run.
 REREAD_COUNT = 3
