@@ -46,6 +46,14 @@ def _mounts_are_read_write(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_mount_is_forced_read_only(monkeypatch):
+    """Read /proc/self/mountinfo as listing no btrfs, never what the test host happens to have mounted."""
+    import statbtrfs
+
+    monkeypatch.setattr(statbtrfs, "read_mountinfo", lambda path=None: [], raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _never_start_real_scrubs(monkeypatch):
     """-s tests must fake start_scrub(); never let one reach a real `btrfs scrub start`."""
     import statbtrfs

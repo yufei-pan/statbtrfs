@@ -25,13 +25,23 @@ options:
                         Colour output: auto (default) on a terminal unless NO_COLOR is set
   -V, --version         show program's version number and exit
 
-Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); 2 the
-check failed (no matching mounts, an unreadable filesystem, a scrub status that could not be read,
-a scrub that did not complete, no root); 130 interrupted; 141 the reader of stdout went away (|
-head).
+Exit status: 0 healthy; 1 problems found (device errors, scrub errors, missing devices, or a
+filesystem forced read-only after an error); 2 the check failed (no matching mounts, an unreadable
+filesystem, a scrub status that could not be read, a scrub that did not complete, no root); 130
+interrupted; 141 the reader of stdout went away (| head).
 
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
+
+Upgrading to 0.43 from 0.42:
+  - A btrfs that the kernel forced read-only after an error (it then takes no writes) is now reported, in
+    every mode: its Mount cell adds "forced read-only", a note says to find the cause in `dmesg` and then
+    unmount and mount it again or reboot (btrfs refuses a remount read-write after an error), and the exit
+    code is 1, problems found. 0.42 showed it as healthy, exit 0. It is read from /proc/self/mountinfo: a
+    mount that is read-write on a filesystem that is read-only. A filesystem mounted -o ro is not reported.
+  - -s no longer scrubs such a filesystem (0.42 scrubbed it read-only and could end "finished, OK"): it is
+    listed as "failed to start: forced read-only after an error, not scrubbed", and the others are scrubbed.
+  - If /proc/self/mountinfo can't be read, a note says the state was not checked, and the exit code is 2.
 
 Upgrading to 0.42 from 0.41:
   - -s on a read-only mount now starts a read-only scrub (`btrfs scrub start -r`), which checks it and repairs

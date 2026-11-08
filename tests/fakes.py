@@ -245,6 +245,16 @@ SCRUB_TIME_BASIC = "Thu May  2 09:56:55 2024"
 SCRUB_TIME_ISO = "2024-05-02 09:56:55"
 
 
+def mountinfo_line(mount, mount_options="rw,relatime", super_options="rw,space_cache", n=40):
+    """A /proc/self/mountinfo line for a btrfs mount: its own options, then (after " - ") its filesystem's."""
+    return f"{n} 1 0:{n} / {mount} {mount_options} shared:{n} - btrfs /dev/mapper/x {super_options},subvolid=5,subvol=/"
+
+
+def install_mountinfo(monkeypatch, module, lines):
+    """Serve ``lines`` as the contents of /proc/self/mountinfo (None: it can't be read)."""
+    monkeypatch.setattr(module, "read_mountinfo", lambda path=None: None if lines is None else list(lines))
+
+
 def uuid_for(n):
     return f"{n:08x}-0000-0000-0000-000000000000"
 
