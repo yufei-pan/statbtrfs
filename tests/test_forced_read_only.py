@@ -1,10 +1,14 @@
 """A btrfs the kernel forced read-only after an error: reported in every mode, never scrubbed as healthy."""
+import errno
+
 import pytest
 
 import statbtrfs
 from fakes import (
     FakeBtrfs,
     SCRUB_FINISHED_OK,
+    SCRUB_NEVER,
+    STATS_NONZERO,
     STATS_ZERO,
     install_mountinfo,
     install_status,
@@ -15,10 +19,17 @@ from fakes import (
 
 # The unpatched reader (conftest serves an empty mountinfo to everything else).
 read_mountinfo = getattr(statbtrfs, "read_mountinfo", None)
+real_start_sync_errno = getattr(statbtrfs, "start_sync_errno", None)
 
 FORCED = mountinfo_line("/mnt/a", "rw,relatime", "ro,space_cache")
 ON_PURPOSE = mountinfo_line("/mnt/a", "ro,relatime", "ro,space_cache")
 HEALTHY = mountinfo_line("/mnt/a")
+
+
+@pytest.fixture(autouse=True)
+def _btrfs_says_forced(monkeypatch):
+    """BTRFS_IOC_START_SYNC on a mount reading rw on a read-only filesystem: EROFS, as on a forced one."""
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: errno.EROFS, raising=False)
 
 
 def _run(monkeypatch, argv):
@@ -53,8 +64,8 @@ REAL_ONE_MOUNT_RO = [
     "85 40 0:39 / /root/sb043/a rw,relatime shared:67 - btrfs /dev/mapper/sb043 rw,seclabel,space_cache,subvolid=5,subvol=/",
     "86 40 0:39 /sv /root/sb043/b ro,relatime shared:69 - btrfs /dev/mapper/sb043 rw,seclabel,space_cache,subvolid=257,subvol=/sv",
 ]
-# `mount -o remount,ro` of one of two mounts: the other keeps rw on a read-only filesystem, as when forced. It
-# takes no writes either, so it is reported (the note says what was seen, read-only though mounted read-write).
+# `mount -o remount,ro` of one of two mounts: the other keeps rw on a read-only filesystem, as when forced, so
+# it is a candidate; BTRFS_IOC_START_SYNC then tells (EL7: success here, EROFS on a forced one).
 REAL_REMOUNTED_RO_BESIDE = [
     "85 40 0:39 / /root/sb043/a ro,relatime shared:67 - btrfs /dev/mapper/sb043 ro,seclabel,space_cache,subvolid=5,subvol=/",
     "86 40 0:39 /sv /root/sb043/b rw,relatime shared:69 - btrfs /dev/mapper/sb043 ro,seclabel,space_cache,subvolid=257,subvol=/sv",
@@ -113,7 +124,7 @@ def test_plain_status_reports_a_forced_read_only_filesystem(monkeypatch, capsys)
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
     assert statbtrfs.main() == statbtrfs.EXIT_PROBLEMS
     out = capsys.readouterr().out
-    assert rows[0][0] == f"/mnt/a, {statbtrfs.RED}forced read-only{statbtrfs.RESET}"
+    assert rows[0][0] == f"{statbtrfs.RED}forced read-only{statbtrfs.RESET}: /mnt/a"
     assert rows[1][0] == "/mnt/b"
     assert "/mnt/a: read-only, though mounted read-write, so it takes no writes" in out
     assert "dmesg" in out and "unmount and mount it again, or reboot" in out
@@ -139,7 +150,7 @@ def test_one_forced_mount_marks_the_whole_filesystem(monkeypatch):
     monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda r, header=None: rows.extend(r) or "TABLE")
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
     assert statbtrfs.main() == statbtrfs.EXIT_PROBLEMS
-    assert rows[0][0].startswith("/mnt/a, /mnt/a2, ")
+    assert rows[0][0].endswith(": /mnt/a, /mnt/a2")
 
 
 def test_unreadable_mountinfo_says_it_was_not_checked(monkeypatch, capsys):
@@ -168,3 +179,114 @@ def test_scrub_does_not_scrub_a_forced_filesystem(monkeypatch, capsys):
     assert "/mnt/a: failed to start: forced read-only after an error, not scrubbed" in out
     assert "/mnt/b: finished, OK" in out
     assert code == statbtrfs.EXIT_PROBLEMS
+
+
+# --- the ioctl tells a forced filesystem from one remounted read-only ---------------
+
+def test_a_remounted_read_only_filesystem_is_not_forced(monkeypatch, capsys):
+    # BTRFS_IOC_START_SYNC succeeds there: the mountinfo candidate is not reported, like a mount -o ro.
+    _status(monkeypatch, "/mnt/a")
+    install_mountinfo(monkeypatch, statbtrfs, [FORCED])
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: 0)
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_OK
+    assert "forced" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("error", [errno.EPERM, errno.ENOTTY, errno.ENOENT, errno.EIO])
+def test_a_candidate_the_ioctl_cannot_tell_about_is_exit_2(monkeypatch, capsys, error):
+    _status(monkeypatch, "/mnt/a")
+    install_mountinfo(monkeypatch, statbtrfs, [FORCED])
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: error)
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    out = capsys.readouterr().out
+    assert "/mnt/a: read-only, though mounted read-write, and btrfs could not be asked whether it was forced" in out
+    assert "forced read-only:" not in out
+
+
+def test_the_first_mount_that_answers_decides(monkeypatch):
+    install_status(monkeypatch, statbtrfs, {
+        "/mnt/a": (make_show(uuid_for(1)), STATS_ZERO, SCRUB_FINISHED_OK),
+        "/mnt/b": (make_show(uuid_for(1)), STATS_ZERO, SCRUB_FINISHED_OK),
+    })
+    install_mountinfo(monkeypatch, statbtrfs, [FORCED, mountinfo_line("/mnt/b", "rw,relatime", "ro,space_cache", n=41)])
+    asked = []
+    answers = {"/mnt/a": errno.EPERM, "/mnt/b": errno.EROFS}
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: asked.append(mount) or answers[mount])
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_PROBLEMS
+    assert asked == ["/mnt/a", "/mnt/b"]
+
+
+def test_only_candidates_are_asked(monkeypatch):
+    _status(monkeypatch, "/mnt/a", "/mnt/b")
+    install_mountinfo(monkeypatch, statbtrfs, [ON_PURPOSE, mountinfo_line("/mnt/b", n=41)])
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: pytest.fail("asked " + mount))
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_OK
+
+
+def test_start_sync_errno_is_the_errno_of_open_or_the_ioctl(tmp_path):
+    real = real_start_sync_errno
+    assert real(str(tmp_path / "missing")) == errno.ENOENT
+    assert real(str(tmp_path)) in (errno.ENOTTY, errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP)  # not a btrfs
+    assert statbtrfs.BTRFS_IOC_START_SYNC == 0x80089418
+
+
+def test_a_scrub_does_not_start_on_a_remounted_read_only_filesystem_as_forced(monkeypatch, capsys):
+    fake = FakeBtrfs(["/mnt/a"], polls=1).install(monkeypatch, statbtrfs)
+    install_mountinfo(monkeypatch, statbtrfs, [FORCED])
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: 0)
+    _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"])
+    assert [m for m, _ in fake.started] == ["/mnt/a"]
+    assert "forced" not in capsys.readouterr().out
+
+
+# --- -d skips the scrub, never the check ----------------------------------------
+
+def _recent(monkeypatch):
+    """SCRUB_FINISHED_OK's scrub finished a day ago."""
+    scrub_epoch = statbtrfs.parse_scrub_time_to_epoch("Thu May  2 09:56:55 2024")
+    monkeypatch.setattr(statbtrfs.time, "time", lambda: scrub_epoch + 24 * 3600)
+    monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: None)
+
+
+def _skipped_fs(monkeypatch, stats):
+    _recent(monkeypatch)
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), stats, SCRUB_FINISHED_OK)})
+
+
+@pytest.mark.parametrize("argv", [["-d", "7"], ["-s", "-d", "7", "--scrub_command_lockout", "0", "-i", "1"],
+                                  ["-w", "-d", "7"]], ids=["plain", "scrub", "watch"])
+def test_d_does_not_hide_a_forced_filesystem(monkeypatch, capsys, argv):
+    _skipped_fs(monkeypatch, STATS_ZERO)
+    install_mountinfo(monkeypatch, statbtrfs, [FORCED])
+    assert _run(monkeypatch, argv) == statbtrfs.EXIT_PROBLEMS
+    out = capsys.readouterr().out
+    assert "/mnt/a: read-only, though mounted read-write" in out
+    assert "nothing to do" not in out
+
+
+@pytest.mark.parametrize("argv", [["-d", "7"], ["-s", "-d", "7", "--scrub_command_lockout", "0", "-i", "1"],
+                                  ["-w", "-d", "7"]], ids=["plain", "scrub", "watch"])
+def test_d_does_not_hide_device_errors(monkeypatch, capsys, argv):
+    _skipped_fs(monkeypatch, STATS_NONZERO)
+    assert _run(monkeypatch, argv) == statbtrfs.EXIT_PROBLEMS
+    assert "nothing to do" not in capsys.readouterr().out
+
+
+def test_d_with_a_healthy_skipped_filesystem_still_says_nothing_to_do(monkeypatch, capsys):
+    _skipped_fs(monkeypatch, STATS_ZERO)
+    assert _run(monkeypatch, ["-d", "7"]) == statbtrfs.EXIT_OK
+    assert "nothing to do" in capsys.readouterr().out
+
+
+def test_d_lists_a_skipped_problem_beside_the_kept_and_not_a_healthy_skipped(monkeypatch):
+    _recent(monkeypatch)
+    install_status(monkeypatch, statbtrfs, {
+        "/mnt/a": (make_show(uuid_for(1)), STATS_NONZERO, SCRUB_FINISHED_OK),   # skipped, device errors
+        "/mnt/b": (make_show(uuid_for(2)), STATS_ZERO, SCRUB_NEVER),            # kept
+        "/mnt/c": (make_show(uuid_for(3)), STATS_ZERO, SCRUB_FINISHED_OK),      # skipped, healthy
+    })
+    rows = []
+    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda r, header=None: rows.extend(r) or "TABLE")
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs", "-d", "7"])
+    assert statbtrfs.main() == statbtrfs.EXIT_PROBLEMS
+    assert sorted(row[0] for row in rows) == ["/mnt/a", "/mnt/b"]

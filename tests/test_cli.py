@@ -188,7 +188,9 @@ def test_main_exclude_recent_prints_skip(monkeypatch, capsys):
     monkeypatch.setattr(statbtrfs.time, "time", lambda: scrub_epoch + 24 * 3600)
 
     install_mounts(monkeypatch, statbtrfs, MOUNT_LINES_SINGLE)
-    mapping = {
+    mapping = {  # -d still checks a skipped filesystem, so it must read healthy
+        ("btrfs", "filesystem", "show", "/mnt/a"): list(SHOW_SINGLE),
+        ("btrfs", "device", "stats", "/mnt/a"): list(STATS_ZERO),
         ("btrfs", "scrub", "status", "/mnt/a"): list(SCRUB_FINISHED_OK),
     }
     cm = CommandMap(mapping=mapping, default=[])

@@ -38,7 +38,15 @@ Upgrading to 0.43 from 0.42:
     every mode: its Mount cell adds "forced read-only", a note says to find the cause in `dmesg` and then
     unmount and mount it again or reboot (btrfs refuses a remount read-write after an error), and the exit
     code is 1, problems found. 0.42 showed it as healthy, exit 0. It is read from /proc/self/mountinfo: a
-    mount that is read-write on a filesystem that is read-only. A filesystem mounted -o ro is not reported.
+    mount that is read-write on a filesystem that is read-only. Such a mount is then asked with
+    BTRFS_IOC_START_SYNC, which fails with EROFS only on a forced filesystem: one mounted -o ro, or remounted
+    read-only (`mount -o remount,ro`) on purpose, is not reported. If that check fails with any other error,
+    a note says it could not tell, and the exit code is 2. The marker comes first in the Mount cell, which the
+    table cuts at the end.
+  - -d (skip filesystems scrubbed within N days) skips the scrub, no longer the check: a skipped filesystem
+    with device errors, scrub errors, a forced read-only state or an unreadable status is shown (row and note)
+    and counts in the exit code, so `statbtrfs -s -d 7` exits 1 where 0.42 said "nothing to do" and exited 0.
+    A healthy skipped filesystem stays out of the table, as before.
   - -s no longer scrubs such a filesystem (0.42 scrubbed it read-only and could end "finished, OK"): it is
     listed as "failed to start: forced read-only after an error, not scrubbed", and the others are scrubbed.
   - If /proc/self/mountinfo can't be read, a note says the state was not checked, and the exit code is 2.
