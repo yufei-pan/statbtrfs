@@ -409,7 +409,8 @@ def test_scrub_summary_with_a_skipped_filesystem_that_cannot_be_read_is_not_gree
     out = capsys.readouterr().out
     assert "Could not fetch complete info for /mnt/a" in out
     assert "All scrubs finished" not in out
-    assert "Scrubs ended; problems found: see the table and notes above." in out
+    assert "Scrubs ended; some checks could not be made: see the notes above." in out
+    assert "problems found" not in out
 
 
 def test_scrub_summary_of_healthy_filesystems_is_green(monkeypatch, capsys):

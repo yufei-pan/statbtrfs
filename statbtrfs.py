@@ -971,7 +971,8 @@ def scrub_filesystems(filesystems, args, screen, skipped=None):
         counts = [f"{len(failed)} could not be started"] if failed else []
         counts += [f"{len(incomplete)} did not complete or could not be read"] if incomplete else []
         counts += [f"{len(attention)} skipped by -d need attention"] if attention else []
-        counts = counts or ["problems found: see the table and notes above"]
+        counts = counts or (["problems found: see the table and notes above"] if code == EXIT_PROBLEMS
+                            else ["some checks could not be made: see the notes above"])
         print(f"{RED}Scrubs ended; {', '.join(counts)}.{RESET}")
     else:
         print(f"{GREEN}All scrubs finished.{RESET}")
