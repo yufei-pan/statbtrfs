@@ -6,8 +6,10 @@ import pytest
 import statbtrfs
 from fakes import (
     FakeBtrfs,
+    SCRUB_FAILED_LOCKED_WARNING,
     SCRUB_FINISHED_OK,
     SCRUB_NEVER,
+    SCRUB_OLD_INTERRUPTED,
     STATS_NONZERO,
     STATS_ZERO,
     install_mountinfo,
@@ -290,3 +292,49 @@ def test_d_lists_a_skipped_problem_beside_the_kept_and_not_a_healthy_skipped(mon
     monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs", "-d", "7"])
     assert statbtrfs.main() == statbtrfs.EXIT_PROBLEMS
     assert sorted(row[0] for row in rows) == ["/mnt/a", "/mnt/b"]
+
+
+# -d reads a skipped filesystem as a one-shot read does: again while a reading tells nothing.
+
+def _skipped_with_replies(monkeypatch, replies):
+    """/mnt/a scrubbed a day ago; its status polls answer ``replies`` in turn (the first is -d's own filter)."""
+    _recent(monkeypatch)
+    return FakeBtrfs(["/mnt/a"], finished=["/mnt/a"], replies={"/mnt/a": replies}).install(monkeypatch, statbtrfs)
+
+
+@pytest.mark.parametrize("reading", [SCRUB_FAILED_LOCKED_WARNING, SCRUB_OLD_INTERRUPTED],
+                         ids=["locked", "interrupted"])
+def test_d_reads_a_skipped_filesystem_again_after_a_reading_that_tells_nothing(monkeypatch, capsys, reading):
+    fake = _skipped_with_replies(monkeypatch, [None, reading])
+    assert _run(monkeypatch, ["-d", "7"]) == statbtrfs.EXIT_OK
+    assert fake.status_polls == 3  # the filter, the check, its re-read
+    assert "nothing to do" in capsys.readouterr().out
+
+
+def test_d_with_a_skipped_status_that_stays_unknown_exits_2(monkeypatch, capsys):
+    fake = _skipped_with_replies(monkeypatch, [None] + [SCRUB_FAILED_LOCKED_WARNING] * 9)
+    assert _run(monkeypatch, ["-d", "7"]) == statbtrfs.EXIT_FAILURE
+    assert fake.status_polls == 5  # the filter, the check, 3 re-reads
+    assert "Could not read the scrub status of /mnt/a." in capsys.readouterr().out
+
+
+# --- the ioctl answers for the whole filesystem ------------------------------------
+
+def _two_mounts():
+    return {"uuid": uuid_for(1), "mounts": ["/mnt/a", "/mnt/b"]}
+
+
+@pytest.mark.parametrize("other, forced", [(0, False), (errno.EROFS, True), (errno.EACCES, statbtrfs.UNTOLD)],
+                         ids=["ok", "erofs", "none-answers"])
+def test_a_candidate_that_cannot_be_opened_leaves_it_to_the_filesystems_other_mounts(monkeypatch, other, forced):
+    # As a user who can't enter /mnt/a (mode 700 root: EACCES), /mnt/b answers for the filesystem.
+    asked = []
+    answers = {"/mnt/a": errno.EACCES, "/mnt/b": other}
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: asked.append(mount) or answers[mount])
+    assert statbtrfs.forced_state(_two_mounts(), {"/mnt/a"}) == forced
+    assert asked == ["/mnt/a", "/mnt/b"]
+
+
+def test_a_filesystem_with_no_candidate_is_not_asked(monkeypatch):
+    monkeypatch.setattr(statbtrfs, "start_sync_errno", lambda mount: pytest.fail("asked " + mount))
+    assert statbtrfs.forced_state(_two_mounts(), set()) is False

@@ -394,14 +394,19 @@ def start_sync_errno(mount):
 
 def forced_state(fs, candidates):
     """Whether filesystem fs is forced read-only: True, False, or UNTOLD. candidates: the mountpoints that read
-    read-write on a read-only filesystem. All mounts share one filesystem, so the first definite answer decides."""
-    for mount in (m for m in fs['mounts'] if m in candidates):
+    read-write on a read-only filesystem. The ioctl answers for the whole filesystem, so the first definite answer
+    decides: the candidates are asked first, then its other mounts (one may not open for this user: a mode 700
+    root gives EACCES while another mount answers)."""
+    asked = [m for m in fs['mounts'] if m in candidates]
+    if not asked:
+        return False
+    for mount in asked + [m for m in fs['mounts'] if m not in candidates]:
         error = start_sync_errno(mount)
         if error == errno.EROFS:
             return True
         if error == 0:
             return False
-    return UNTOLD if candidates.intersection(fs['mounts']) else False
+    return UNTOLD
 
 def discover_filesystems(mounts):
     """Group mountpoints into filesystems by UUID: [{'uuid': str | None, 'mounts': [...]}].
@@ -654,8 +659,10 @@ def check_skipped(skipped):
     an unreadable status), or None. A healthy one stays out of the table, as -d documents."""
     if not skipped:
         return None
-    unhealthy = [status for status in (build_status([polled]) for polled in poll_filesystems(skipped))
-                 if status.problems or status.failures]
+    # Each is read again as a one-shot read is (reread_unclear), or a lock collision with another reader would
+    # fail a filesystem that is fine.
+    statuses = [reread_unclear([polled[0]], build_status([polled])) for polled in poll_filesystems(skipped)]
+    unhealthy = [status for status in statuses if status.problems or status.failures]
     if not unhealthy:
         return None
     return Status([row for st in unhealthy for row in st.rows], [], any(st.problems for st in unhealthy),
