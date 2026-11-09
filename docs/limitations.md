@@ -11,3 +11,15 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
   apart would take another command and code path (asking sudo's PATH) for a rare setup.
 - Revisit when: someone hits it.
 - Approved: 2026-10-23, the user chose "Known limitation (Recommended)".
+
+### A forced read-only filesystem behind mounts statbtrfs can't open
+- Kind: known limitation
+- What the operator sees: statbtrfs runs as a user who can open no mount of a filesystem (for example a non-root user behind the
+  per-command `sudo` fallback, with the mount point's directory closed to them), and that filesystem reads read-only in
+  /proc/self/mountinfo as a forced one would: its row says statbtrfs could not tell whether the kernel forced it read-only, and
+  the exit code is 2.
+- Why: the forced state is told apart from an `-o ro` mount only by BTRFS_IOC_START_SYNC on an open mount, which needs a
+  descriptor of statbtrfs's own; running that call through sudo would take a second process and code path for a rare setup. Running
+  statbtrfs as root avoids it.
+- Revisit when: an operator hits it on a setup where statbtrfs can't run as root.
+- Approved: 2026-11-08, the user chose "Approve (Recommended)".
