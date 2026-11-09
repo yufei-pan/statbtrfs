@@ -195,16 +195,39 @@ SCRUB_OLD_FINISHED_ERRORS = [
     "\tcorrected errors: 0, uncorrectable errors: 2, unverified errors: 0",
 ]
 
-# What a status reader gets when another reader holds the status file's lock (flock LOCK_EX|LOCK_NB). The
-# warning is on stderr, rc 1: execute_commands returns stdout, so statbtrfs sees the empty reply.
+# What a status reader gets when another reader holds the status file's lock (flock LOCK_EX|LOCK_NB): rc 1 and
+# the warning on stderr, which execute_commands (with_stdErr) returns, so the real reply is _WARNING. The empty
+# one stands for a command that printed nothing.
 SCRUB_FAILED_LOCKED = []
 SCRUB_FAILED_LOCKED_WARNING = ["WARNING: failed to open status file: Resource temporarily unavailable"]
-# Reading the file failed part way: the warning, then a reply that reads like a filesystem never scrubbed.
+# Reading the progress failed part way, at the very end of a `-B` scrub started elsewhere: rc 0, a reply that reads
+# like a filesystem never scrubbed, and the warning on stderr, which execute_commands puts after stdout.
 SCRUB_FAILED_READ = [
-    "WARNING: failed to read status: Connection reset by peer",
     "scrub status for 7ce03782-1b05-405a-bdf3-01d1cc986790",
     "\tno stats available",
     "\ttotal bytes scrubbed: 0.00B with 0 errors",
+    "WARNING: failed to read status: Connection reset by peer",
+]
+# The same failure on current btrfs-progs, built from SCRUB_NEVER_REAL and the same warning (cmds/scrub.c prints
+# it with the same words): not seen on 6.2, where a never-scrubbed reply is plain Never, not held.
+SCRUB_FAILED_READ_MODERN = [
+    "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
+    "\tno stats available",
+    "Total to scrub:   400.78MiB",
+    "Rate:             0.00B/s",
+    "Error summary:    no errors found",
+    "WARNING: failed to read status: Connection reset by peer",
+]
+
+# Current btrfs-progs after `btrfs scrub cancel`.
+SCRUB_ABORTED = [
+    "UUID:             76f821a1-8129-4147-b0f1-436771be839f",
+    "Scrub started:    Thu May  2 09:56:55 2024",
+    "Status:           aborted",
+    "Duration:         0:00:12",
+    "Total to scrub:   10.00GiB",
+    "Rate:             17.00MiB/s",
+    "Error summary:    no errors found",
 ]
 
 # Modern btrfs-progs: "Scrub resumed:" takes the place of "Scrub started:".
@@ -220,6 +243,16 @@ SCRUB_RESUMED = [
 
 SCRUB_TIME_BASIC = "Thu May  2 09:56:55 2024"
 SCRUB_TIME_ISO = "2024-05-02 09:56:55"
+
+
+def mountinfo_line(mount, mount_options="rw,relatime", super_options="rw,space_cache", n=40):
+    """A /proc/self/mountinfo line for a btrfs mount: its own options, then (after " - ") its filesystem's."""
+    return f"{n} 1 0:{n} / {mount} {mount_options} shared:{n} - btrfs /dev/mapper/x {super_options},subvolid=5,subvol=/"
+
+
+def install_mountinfo(monkeypatch, module, lines):
+    """Serve ``lines`` as the contents of /proc/self/mountinfo (None: it can't be read)."""
+    monkeypatch.setattr(module, "read_mountinfo", lambda path=None: None if lines is None else list(lines))
 
 
 def uuid_for(n):
@@ -389,7 +422,7 @@ class FakeBtrfs:
                     return list(SCRUB_OLD_FINISHED_ERRORS if mount in self.errors else SCRUB_OLD_FINISHED_OK)
                 return list(SCRUB_FINISHED_ERRORS if mount in self.errors else SCRUB_FINISHED_OK)
             if state == "aborted":
-                return [line.replace("finished", "aborted") for line in SCRUB_FINISHED_OK]
+                return list(SCRUB_OLD_ABORTED if self.old_progs else SCRUB_ABORTED)
             return list(SCRUB_OLD_NEVER if self.old_progs else SCRUB_NEVER)
         return []
 

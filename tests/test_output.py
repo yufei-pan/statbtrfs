@@ -11,6 +11,9 @@ from fakes import (
     SHOW_INCOMPLETE,
     STATS_MULTI_DEVICE,
     STATS_ZERO,
+    SCRUB_FAILED_LOCKED_WARNING,
+    SCRUB_OLD_INTERRUPTED,
+    FakeBtrfs,
     install_status,
     make_show,
     uuid_for,
@@ -64,6 +67,66 @@ def test_exit_failure_when_pattern_matches_nothing(monkeypatch):
 def test_exit_failure_when_a_filesystem_cannot_be_read(monkeypatch):
     install_status(monkeypatch, statbtrfs, {"/mnt/a": HEALTHY, "/mnt/b": (SHOW_INCOMPLETE, STATS_ZERO, SCRUB_FINISHED_OK)})
     assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+
+
+@pytest.mark.parametrize("scrub", ["SCRUB_ABORTED", "SCRUB_OLD_ABORTED", "SCRUB_OLD_INTERRUPTED"])
+def test_exit_failure_when_the_last_scrub_did_not_complete(monkeypatch, capsys, scrub):
+    import fakes
+    monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: None)  # the re-reads
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), STATS_ZERO, getattr(fakes, scrub))})
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    assert "The last scrub of /mnt/a did not complete" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("scrub", ["SCRUB_FAILED_LOCKED", "SCRUB_FAILED_LOCKED_WARNING", "SCRUB_FAILED_READ",
+                                   "SCRUB_FAILED_READ_MODERN"])
+def test_exit_failure_when_the_scrub_status_cannot_be_read(monkeypatch, capsys, scrub):
+    import fakes
+    monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: None)  # the re-reads
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), STATS_ZERO, getattr(fakes, scrub))})
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    assert "Could not read the scrub status of /mnt/a." in capsys.readouterr().out
+
+
+# A one-shot read that lands on a collision with another reader, or on the moment a scrub ends, reads again.
+
+@pytest.mark.parametrize("old_progs", [False, True])
+def test_plain_run_reads_again_after_a_locked_reply(monkeypatch, old_progs):
+    fake = FakeBtrfs(["/mnt/a"], finished=["/mnt/a"], old_progs=old_progs,
+                     replies={"/mnt/a": [SCRUB_FAILED_LOCKED_WARNING]}).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_OK
+    assert fake.status_polls == 2
+    assert fake.sleeps == 1
+
+
+def test_plain_run_that_stays_unknown_reads_three_more_times_and_exits_2(monkeypatch, capsys):
+    fake = FakeBtrfs(["/mnt/a"], finished=["/mnt/a"],
+                     replies={"/mnt/a": [SCRUB_FAILED_LOCKED_WARNING] * 9}).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    assert fake.status_polls == 4
+    assert fake.clock == 1_000_000.0 + 3 * 0.5
+    assert "Could not read the scrub status of /mnt/a." in capsys.readouterr().out
+
+
+def test_plain_run_reads_again_after_a_lone_interrupted(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a"], finished=["/mnt/a"], old_progs=True,
+                     replies={"/mnt/a": [SCRUB_OLD_INTERRUPTED]}).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_OK
+    assert fake.status_polls == 2
+
+
+def test_plain_run_with_an_interrupted_scrub_that_stays_so_exits_2(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a"], old_progs=True,
+                     replies={"/mnt/a": [SCRUB_OLD_INTERRUPTED] * 9}).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_FAILURE
+    assert fake.status_polls == 4
+
+
+def test_plain_run_does_not_wait_for_a_filesystem_never_scrubbed(monkeypatch):
+    fake = FakeBtrfs(["/mnt/a"], old_progs=True).install(monkeypatch, statbtrfs)
+    assert _run(monkeypatch, []) == statbtrfs.EXIT_OK
+    assert fake.status_polls == 1
+    assert fake.sleeps == 0
 
 
 def test_problems_take_precedence_over_failures(monkeypatch):

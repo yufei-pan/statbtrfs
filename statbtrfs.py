@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
 import argparse
+import errno
+import fcntl
 import functools
 import time
 import os
@@ -204,15 +206,17 @@ A29k[Y%X%b*8G23-6fn]%PJfV*gXR/$P5".&Jh]pshciOl.[VR0@t$"u18gT$IPp=U'\&/LA;hKZhLGk
 !!0HY!NjiR]:N`,Z,C;P!WW3#!!HG.'''
 	exec(lzma.decompress(base64.a85decode(_SRC_B85)).decode("utf-8"), multiCMD.__dict__)
 
-version='0.40'
+version='0.43'
 __version__ = version
 
 # -s runs for hours, often into a log: don't let output sit in a buffer.
 print = functools.partial(print, flush=True)
 
 EXIT_OK = 0        # healthy
-EXIT_PROBLEMS = 1  # device errors, scrub errors or missing devices found
-EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, no root
+EXIT_PROBLEMS = 1  # device errors, scrub errors, missing devices, or a filesystem forced read-only after an error
+EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, a scrub status that could not be read,
+                   # a scrub that did not complete, an unreadable /proc/self/mountinfo or a filesystem that could
+                   # not be asked whether it was forced read-only, no root
 EXIT_INTERRUPTED = 130  # Ctrl-C
 EXIT_PIPE_CLOSED = 141  # the reader went away (`statbtrfs | head`): 128 + SIGPIPE, as a shell reports it, and as statblk does
 
@@ -291,15 +295,17 @@ def acquire_root(argv):
         os.execv(sudo, [sudo, '--'] + command)
     USE_SUDO = True
 
+# Each reply is the command's stdout, then its stderr: btrfs reports some failures only there (`scrub
+# status` that failed to read the status file part way still exits 0). The parsers skip lines they don't know.
 def execute_command(command):
     if USE_SUDO:
         command = ['sudo'] + command
-    return multiCMD.run_command(command,quiet=True)
+    return multiCMD.run_command(command,quiet=True,with_stdErr=True)
 
 def execute_commands(commands):
     if USE_SUDO:
         commands = [['sudo']+command for command in commands]
-    return multiCMD.run_commands(commands,quiet=True,max_threads=MAX_PARALLEL_COMMANDS)
+    return multiCMD.run_commands(commands,quiet=True,with_stdErr=True,max_threads=MAX_PARALLEL_COMMANDS)
 
 def btrfs_not_found():
     """Whether btrfs is missing from PATH (multiCMD's quiet=True hides its own "Command path not found"
@@ -329,6 +335,79 @@ def parse_proc_mounts(lines):
 def find_btrfs_mounts():
     """Sorted btrfs mountpoints."""
     return sorted(set(parse_proc_mounts(read_proc_mounts())))
+
+# mountinfo keeps apart what /proc/self/mounts and statvfs() merge: a mount's own ro/rw (MNT_READONLY), before
+# the " - ", and its filesystem's (the superblock's), after the type and source. btrfs sets only the superblock
+# read-only when it aborts a transaction after an error ("forced readonly"), so its mounts keep rw. A mount -o ro
+# is ro in both. fs/proc_namespace.c show_mountinfo, the same in 3.10 (EL7) and 4.18 (EL8).
+PROC_MOUNTINFO = '/proc/self/mountinfo'
+
+def read_mountinfo(path=PROC_MOUNTINFO):
+    """The lines of mountinfo, or None if it can't be read."""
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as f:
+            return f.read().splitlines()
+    except OSError:
+        return None
+
+def parse_forced_read_only(lines):
+    """btrfs mountpoints mounted read-write on a filesystem that is read-only."""
+    forced = set()
+    for line in lines:
+        fields = line.split(' ')
+        try:
+            # Fields 7 on are optional tags (shared:1, master:2, ...) up to "-": then type, source, its options.
+            dash = fields.index('-', 6)
+            fstype, super_options = fields[dash + 1], fields[dash + 3].split(',')
+        except (ValueError, IndexError):
+            continue
+        if fstype == 'btrfs' and fields[5].split(',')[0] == 'rw' and super_options[0] == 'ro':
+            forced.add(_MOUNT_ESCAPE_RX.sub(lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return forced
+
+def forced_read_only_mounts():
+    """parse_forced_read_only() of this process's mountinfo, or None if it could not be read."""
+    lines = read_mountinfo()
+    return None if lines is None else parse_forced_read_only(lines)
+
+# A mount that is read-write on a read-only filesystem is forced only if btrfs says so: `mount -o remount,ro` of
+# one mount of several leaves the others looking the same in mountinfo. BTRFS_IOC_START_SYNC (_IOR(0x94, 24, __u64))
+# starts a commit of the running transaction without waiting for it. A filesystem in btrfs's error state refuses
+# every transaction with EROFS (join_transaction, v3.10 and master); a filesystem read-only by a remount has no
+# transaction to commit and returns success, so the call changes nothing on a read-only filesystem. Measured on
+# EL7 (3.10.0-1160.119.1): forced EROFS; a mount beside a remount, and `-o ro`, success. Decided by the errno only.
+BTRFS_IOC_START_SYNC = 0x80089418
+UNTOLD = "untold"  # a forced-state value: a candidate that the ioctl could not tell about
+
+def start_sync_errno(mount):
+    """0 if BTRFS_IOC_START_SYNC on mount succeeds, else its errno (that of open() if mount can't be opened)."""
+    try:
+        fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        return e.errno or errno.EIO
+    try:
+        fcntl.ioctl(fd, BTRFS_IOC_START_SYNC, bytearray(8))
+        return 0
+    except OSError as e:
+        return e.errno or errno.EIO
+    finally:
+        os.close(fd)
+
+def forced_state(fs, candidates):
+    """Whether filesystem fs is forced read-only: True, False, or UNTOLD. candidates: the mountpoints that read
+    read-write on a read-only filesystem. The ioctl answers for the whole filesystem, so the first definite answer
+    decides: the candidates are asked first, then its other mounts (one may not open for this user: a mode 700
+    root gives EACCES while another mount answers)."""
+    asked = [m for m in fs['mounts'] if m in candidates]
+    if not asked:
+        return False
+    for mount in asked + [m for m in fs['mounts'] if m not in candidates]:
+        error = start_sync_errno(mount)
+        if error == errno.EROFS:
+            return True
+        if error == 0:
+            return False
+    return UNTOLD
 
 def discover_filesystems(mounts):
     """Group mountpoints into filesystems by UUID: [{'uuid': str | None, 'mounts': [...]}].
@@ -450,12 +529,39 @@ def summarize_scrub_errors(summary, following_lines):
 #   error details: csum=2
 #   corrected errors: 0, uncorrectable errors: 2, unverified errors: 0
 _OLD_SCRUB_STATE_RX = re.compile(r'\s*scrub (?:started|resumed) at (.+?)(?:,| and(?: was)?) '
-                                 r'(running|finished|aborted|interrupted) (?:for|after) ')
+                                 r'(running|finished|aborted|interrupted) (?:for|after) (\d+):(\d\d):(\d\d)')
 _OLD_SCRUB_TOTAL_RX = re.compile(r'\s*total bytes scrubbed: (\S+) with (\d+) errors')
 _OLD_SCRUB_DETAILS_RX = re.compile(r'\s*error details:(.*)')
 _OLD_SCRUB_COUNT_RX = re.compile(r'(\w+) errors: (\d+)')
 
 _SCRUB_REPLY_STARTS = ("scrub status for", "UUID:")
+# btrfs-progs 4.9.1 and current print these on stderr when the status file can't be opened (another reader holds
+# its lock: rc 1, no reply) or read (at the very end of a `-B` scrub: rc 0, and a reply that says nothing).
+_SCRUB_READ_FAILED_RX = re.compile(r'WARNING: failed to (?:open status file|read status)\b')
+# What a failed status read shows: nothing in it can be trusted.
+SCRUB_UNKNOWN = {"scrub_status": "unknown", "scrub_time": "N/A", "scrub_rate": "N/A", "scrubbed_data": "N/A",
+                 "error_summary": "N/A", "has_errors": False, "no_record": True}
+# A scrub that stopped before covering the filesystem: cancelled (aborted) or its process killed (interrupted).
+SCRUB_INCOMPLETE = ("aborted", "interrupted")
+
+# Sizes as btrfs-progs prints them (pretty_size: two decimals, binary units), e.g. "5.87GiB", "0.00B".
+_SIZE_UNITS = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
+_SIZE_RX = re.compile(r'(\d+(?:\.\d+)?)(' + '|'.join(_SIZE_UNITS) + r')')
+
+def parse_size(text):
+    """Bytes in a btrfs-progs size, or None if text is not one."""
+    match = _SIZE_RX.fullmatch(text.strip())
+    if not match:
+        return None
+    return float(match.group(1)) * 1024 ** _SIZE_UNITS.index(match.group(2))
+
+def format_size(num_bytes):
+    """num_bytes as btrfs-progs prints a size."""
+    value, unit = float(num_bytes), 0
+    while value >= 1024 and unit < len(_SIZE_UNITS) - 1:
+        value /= 1024
+        unit += 1
+    return f"{value:.2f}{_SIZE_UNITS[unit]}"
 
 def summarize_old_scrub_errors(following_lines):
     """The same cell as summarize_scrub_errors, from the lines after an old "total bytes scrubbed" line."""
@@ -478,17 +584,23 @@ def parse_scrub_status(lines):
         "has_errors": False,
         "no_record": False,  # the reply can't tell a scrub in its first seconds from no scrub at all
     }
+    old_seconds = 0  # the old format's duration, for the rate it doesn't print
     for index, line in enumerate(lines):
         old_state = _OLD_SCRUB_STATE_RX.match(line)
         old_total = _OLD_SCRUB_TOTAL_RX.match(line)
         if old_state:
-            scrub_data["scrub_time"], scrub_data["scrub_status"] = old_state.groups()
+            scrub_data["scrub_time"], scrub_data["scrub_status"], hours, minutes, seconds = old_state.groups()
+            old_seconds = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
         elif old_total:
             # With "no stats available" this line is all zeros and says nothing.
             if scrub_data["scrub_status"] == "Never":
                 scrub_data["no_record"] = True
             else:
                 scrub_data["scrubbed_data"] = old_total.group(1)
+                scrubbed = parse_size(old_total.group(1))
+                # Under a second there is no rate to tell; modern btrfs-progs show 0.00B/s there.
+                if scrubbed is not None and old_seconds:
+                    scrub_data["scrub_rate"] = format_size(scrubbed / old_seconds) + "/s"
                 if int(old_total.group(2)):
                     summary = summarize_old_scrub_errors(lines[index + 1:])
                     scrub_data["error_summary"] = f"{RED}{summary}{RESET}"
@@ -517,10 +629,15 @@ def parse_scrub_status(lines):
                 scrub_data["error_summary"] = f"{RED}{summarize_scrub_errors(summary, lines[index + 1:])}{RESET}"
                 scrub_data["has_errors"] = True
 
-    # A reader that lost the status file's lock to another reader gets no reply at all.
-    if scrub_data["scrub_status"] == "Never" and not any(line.startswith(_SCRUB_REPLY_STARTS) for line in lines):
-        scrub_data["scrub_status"] = "unknown"
-        scrub_data["no_record"] = True
+    # A reader that lost the status file's lock to another reader gets no reply at all, and one whose read failed
+    # part way gets a reply that reads like a filesystem never scrubbed: neither tells anything.
+    if (any(_SCRUB_READ_FAILED_RX.match(line) for line in lines)
+            or scrub_data["scrub_status"] == "Never" and not any(line.startswith(_SCRUB_REPLY_STARTS) for line in lines)):
+        scrub_data.update(SCRUB_UNKNOWN)
+    scrub_data["incomplete"] = scrub_data["scrub_status"] in SCRUB_INCOMPLETE
+    if scrub_data["incomplete"] and not scrub_data["has_errors"]:
+        # No errors in what it covered, but it did not cover everything: not OK.
+        scrub_data["error_summary"] = f"{YELLOW}incomplete{RESET}"
     return scrub_data
 
 def parse_scrub_time_to_epoch(scrub_time):
@@ -536,6 +653,29 @@ def parse_scrub_time_to_epoch(scrub_time):
         except ValueError:
             continue
     return None
+
+def check_skipped(skipped):
+    """-d skips the scrub of a recently scrubbed filesystem, never the check: a Status (rows, notes, verdicts) of
+    those of skipped with a problem or a failure (device errors, errors the last scrub found, forced read-only,
+    an unreadable status), or None. A healthy one stays out of the table, as -d documents."""
+    if not skipped:
+        return None
+    # Each is read again as a one-shot read is (reread_unclear), or a lock collision with another reader would
+    # fail a filesystem that is fine.
+    statuses = [reread_unclear([polled[0]], build_status([polled])) for polled in poll_filesystems(skipped)]
+    unhealthy = [status for status in statuses if status.problems or status.failures]
+    if not unhealthy:
+        return None
+    return Status([row for st in unhealthy for row in st.rows], [], any(st.problems for st in unhealthy),
+                  any(st.failures for st in unhealthy), unique([note for st in unhealthy for note in st.notes]),
+                  {mount: scrub for st in unhealthy for mount, scrub in st.scrubs.items()})
+
+def recheck_skipped(skipped_filesystems, before):
+    """check_skipped() again, at the end of a run that may have lasted hours: (status, changed from before)."""
+    now = check_skipped(skipped_filesystems)
+    unchanged = (now is None and before is None) or (
+        now is not None and before is not None and (now.rows, now.notes) == (before.rows, before.notes))
+    return now, not unchanged
 
 def filter_recently_scrubbed(filesystems, exclude_recent_days):
     """Split filesystems into (kept, skipped): skipped finished a scrub within exclude_recent_days."""
@@ -565,7 +705,9 @@ def filter_recently_scrubbed(filesystems, exclude_recent_days):
     return kept, skipped
 
 def poll_filesystems(filesystems):
-    """[(fs, show, stats, scrub_status)] for every filesystem, from one parallel batch of commands."""
+    """[(fs, show, stats, scrub_status, forced)] for every filesystem, from one parallel batch of commands. forced:
+    whether btrfs forced it read-only after an error (None: mountinfo could not be read; UNTOLD: it looks so in
+    mountinfo and the check could not confirm it)."""
     commands = []
     for fs in filesystems:
         mount = fs['mounts'][0]
@@ -575,7 +717,9 @@ def poll_filesystems(filesystems):
             ["btrfs", "scrub", "status", mount],
         ]
     outputs = execute_commands(commands)
-    return [(fs, *outputs[3 * i:3 * i + 3]) for i, fs in enumerate(filesystems)]
+    forced = forced_read_only_mounts()  # after the commands: as new as they are
+    return [(fs, *outputs[3 * i:3 * i + 3], None if forced is None else forced_state(fs, forced))
+            for i, fs in enumerate(filesystems)]
 
 TABLE_HEADER = ["Mount", "Path", "FS Used", "w_err", "r_err", "f_err", "bit_rot", "gen_err",
                 "scrub_status", "scrub_time", "scrub_rate", "scrubbed_data", "error_summary"]
@@ -584,15 +728,29 @@ Status = namedtuple('Status', 'rows running problems failures notes scrubs')
 
 def build_status(polled):
     """Status of poll_filesystems() output: table rows, running filesystems, whether problems
-    (device errors, scrub errors, missing devices) or failures (unreadable filesystems) were seen,
-    notes to show with the table, and the parsed scrub status per first mountpoint."""
+    (device errors, scrub errors, missing devices, a filesystem forced read-only) or failures (unreadable
+    filesystems, a scrub status that could not be read, a scrub that did not complete, mountinfo unreadable)
+    were seen, notes to show with the table, and the parsed scrub status per first mountpoint."""
     rows, running, notes = [], [], []
     scrubs = {}
     problems = failures = False
-    for fs, filesystem_show, device_stats, scrub_output in polled:
+    unchecked = False  # mountinfo could not be read: no forced read-only state was checked
+    untold = []     # filesystems that look forced read-only, which the check could not confirm
+    for fs, filesystem_show, device_stats, scrub_output, forced in polled:
         uuid, fs_used, device_path, missing = parse_show_info(filesystem_show)
+        mounts = ', '.join(fs['mounts'])
+        # Whether it was forced read-only does not depend on `btrfs filesystem show`: apply it to every filesystem.
+        if forced is True:
+            problems = True
+            notes.append(f"{RED}{mounts}: read-only, though mounted read-write, so it takes no writes: btrfs does this "
+                         f"after an error (\"forced readonly\" in `dmesg`). Once the cause is fixed, unmount and mount "
+                         f"it again, or reboot: btrfs refuses a remount read-write after an error.{RESET}")
+        elif forced is None:
+            unchecked = True
+        elif forced == UNTOLD:
+            untold.append(mounts)
         if uuid is None or fs_used is None or device_path is None:
-            notes.append(f"{RED}Could not fetch complete info for {', '.join(fs['mounts'])}. Skipping...{RESET}")
+            notes.append(f"{RED}Could not fetch complete info for {mounts}. Skipping...{RESET}")
             failures = True
             continue
         err_dict = parse_device_stats(device_stats)
@@ -602,8 +760,15 @@ def build_status(polled):
             running.append(fs)
         if missing or any(err_dict.values()) or scrub_data["has_errors"]:
             problems = True
+        if scrub_data["scrub_status"] == "unknown":
+            notes.append(f"{YELLOW}Could not read the scrub status of {mounts}.{RESET}")
+            failures = True
+        elif scrub_data["incomplete"]:
+            notes.append(f"{YELLOW}The last scrub of {mounts} did not complete: continue it with "
+                         f"`{' '.join(scrub_command('resume', scrub_mount(fs)))}`.{RESET}")
+            failures = True
         rows.append([
-            ", ".join(fs['mounts']),
+            f"{RED}forced read-only{RESET}: {mounts}" if forced is True else mounts,
             format_device_path(device_path, missing),
             fs_used,
             color_error_count(err_dict.get('write_io_errs', 0)),
@@ -617,7 +782,28 @@ def build_status(polled):
             scrub_data["scrubbed_data"],
             scrub_data["error_summary"]
         ])
+    if unchecked:
+        # One text for the run (merge_status drops a repeat): the unreadable file is one fact, not one per filesystem.
+        notes.append(f"{YELLOW}Could not read {PROC_MOUNTINFO}: not checked whether a filesystem was forced "
+                     f"read-only.{RESET}")
+        failures = True
+    if untold:
+        notes.append(f"{YELLOW}{'; '.join(untold)}: read-only, though mounted read-write, and btrfs could not be "
+                     f"asked whether it was forced read-only after an error (check `dmesg`).{RESET}")
+        failures = True
     return Status(rows, running, problems, failures, notes, scrubs)
+
+def unique(items):
+    """items without repeats, in order."""
+    seen = set()
+    return [item for item in items if not (item in seen or seen.add(item))]
+
+def merge_status(status, extra):
+    """status with the rows, notes and verdicts of extra (a Status or None) added."""
+    if extra is None:
+        return status
+    return Status(status.rows + extra.rows, status.running, status.problems or extra.problems,
+                  status.failures or extra.failures, unique(status.notes + extra.notes), status.scrubs)
 
 def exit_code(problems, failures):
     # A health problem matters more than a filesystem we couldn't read.
@@ -642,11 +828,30 @@ def run_detached(command):
         output.seek(0)
         return returncode, output.read().decode('utf-8', 'replace').strip()
 
+def is_read_only(mount):
+    """Whether mount is mounted read-only. There btrfs aborts a read-write scrub at once, start and resume alike
+    (the status file keeps no -r for a resume to reuse): only `-r` scrubs it. A mount that can't be asked is
+    left to btrfs, which reports it."""
+    try:
+        return bool(os.statvfs(mount).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+def scrub_mount(fs):
+    """The mount of filesystem fs to run scrub start|resume through: the first that is not read-only, as a
+    read-only scrub repairs nothing, and the first of all (so `-r`) only when every mount is read-only. The first
+    mount stays the filesystem's identity for status, holds and the summary."""
+    return next((mount for mount in fs['mounts'] if not is_read_only(mount)), fs['mounts'][0])
+
+def scrub_command(verb, mount):
+    """`btrfs scrub start|resume`, read-only (-r) on a read-only mount, where nothing could be repaired anyway."""
+    return ['btrfs', 'scrub', verb] + (['-r'] if is_read_only(mount) else []) + [mount]
+
 def start_scrub(mount):
     """Start a background scrub: ('started' | 'running' | 'failed', message).
 
     'running' means a scrub was already running on the filesystem (started elsewhere)."""
-    returncode, output = run_detached(['btrfs', 'scrub', 'start', mount])
+    returncode, output = run_detached(scrub_command('start', mount))
     if returncode == 0:
         return 'started', output
     if 'already running' in output.lower():
@@ -668,6 +873,24 @@ def describe_scrub(scrub_data):
 # `interrupted`, which btrfs also prints for a moment as a scrub ends. They count only once they have held this long.
 SCRUB_HOLD_SECONDS = 10
 
+# A one-shot read can land on a reading that tells nothing: `unknown` (another reader holds btrfs scrub status's
+# lock on the status file, flock LOCK_EX|LOCK_NB, so the loser gets no reply) or `interrupted` (printed for about
+# a millisecond as a scrub ends). Both measured on EL7 (btrfs-progs 4.9.1): a collision in 3.7-4% of pairs of
+# statbtrfs runs started together, a lone `interrupted` once in ~20,000 reads. Both last about 1 ms, so the next read is
+# clean; three reads cap the cost of a real failure (an unreadable status, a scrub that stays interrupted) at
+# 1.5 s per run.
+REREAD_COUNT = 3
+REREAD_SECONDS = 0.5
+
+def reread_unclear(filesystems, status, unclear=("unknown", "interrupted")):
+    """status, read again while any scrub reading is one of unclear (up to REREAD_COUNT times)."""
+    for _ in range(REREAD_COUNT):
+        if not any(scrub["scrub_status"] in unclear for scrub in status.scrubs.values()):
+            break
+        time.sleep(REREAD_SECONDS)
+        status = build_status(poll_filesystems(filesystems))
+    return status
+
 def held_scrubs(mounts, status, since, seen_running):
     """Those of mounts to treat as running: their reading is one of the above and has not held long enough.
 
@@ -684,7 +907,7 @@ def held_scrubs(mounts, status, since, seen_running):
             held.add(mount)
     return held
 
-def scrub_filesystems(filesystems, args, screen):
+def scrub_filesystems(filesystems, args, screen, skipped=None, skipped_filesystems=()):
     """-s: start scrubs in mountpoint order, keeping at most -m running, until every filesystem
     has been scrubbed. Prints a per-filesystem summary and returns the exit code."""
     max_running = args.max_scrub_count if args.max_scrub_count >= 1 else os.cpu_count()
@@ -692,6 +915,7 @@ def scrub_filesystems(filesystems, args, screen):
     started = []      # mounts this run started
     adopted = []      # mounts that were already running when we tried
     failed = {}       # mount -> why the start failed
+    via = {}          # mount -> the mount of that filesystem its scrub was started through, for scrub_interrupted()
     unconfirmed = set()  # started since the last poll, not seen running yet
     running = set()
     since = {}        # for held_scrubs()
@@ -701,8 +925,15 @@ def scrub_filesystems(filesystems, args, screen):
     def start_next():
         nonlocal last_start
         while queue:
-            mount = queue.pop(0)['mounts'][0]
-            state, message = start_scrub(mount)
+            fs = queue.pop(0)
+            mount = fs['mounts'][0]
+            via[mount] = scrub_mount(fs)
+            # Forced read-only after an error, it would scrub read-only and could end "finished, OK": the error
+            # comes first. Asked at the start, as it can happen while the run waits.
+            if forced_state(fs, forced_read_only_mounts() or set()) is True:
+                state, message = 'failed', "forced read-only after an error; not started by this run"
+            else:
+                state, message = start_scrub(via[mount])
             if state == 'failed':
                 failed[mount] = message
                 screen.event(f"{RED}Could not start scrub on {mount}: {message}{RESET}")
@@ -710,7 +941,9 @@ def scrub_filesystems(filesystems, args, screen):
             if state == 'started':
                 started.append(mount)
                 unconfirmed.add(mount)
-                screen.event(f"{YELLOW}Started scrub on {mount}{RESET}")
+                kind = "read-only scrub (repairs nothing)" if is_read_only(via[mount]) else "scrub"
+                through = f" (through {via[mount]})" if via[mount] != mount else ""
+                screen.event(f"{YELLOW}Started {kind} on {mount}{through}{RESET}")
             else:
                 adopted.append(mount)
                 screen.event(f"{YELLOW}Scrub already running on {mount}; counting it as running{RESET}")
@@ -722,7 +955,8 @@ def scrub_filesystems(filesystems, args, screen):
             start_next()
         time.sleep(args.interval)
         while True:
-            status = build_status(poll_filesystems(filesystems))
+            kept = build_status(poll_filesystems(filesystems))
+            status = merge_status(kept, skipped)
             ours = started + adopted
             running = {fs['mounts'][0] for fs in status.running} | held_scrubs(ours, status, since, ours)
             unconfirmed.clear()
@@ -735,10 +969,26 @@ def scrub_filesystems(filesystems, args, screen):
                 break
             time.sleep(args.interval)
     except KeyboardInterrupt:
-        return scrub_interrupted(started, adopted, running | unconfirmed, queue)
+        return scrub_interrupted(started, adopted, running | unconfirmed, queue, via)
 
-    if failed:
-        print(f"{RED}Scrubs finished; {len(failed)} could not be started.{RESET}")
+    # The filesystems -d skipped are checked again: the run may have lasted hours.
+    skipped, changed = recheck_skipped(skipped_filesystems, skipped)
+    if changed:
+        status = merge_status(kept, skipped)
+        screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
+    mounts = [fs['mounts'][0] for fs in filesystems]
+    incomplete = [m for m in mounts if m not in failed and status.scrubs.get(m, SCRUB_UNKNOWN)["scrub_status"]
+                  in SCRUB_INCOMPLETE + ("unknown",)]
+    # Filesystems -d skipped that have a problem (their rows are in skipped): they set the exit code too.
+    attention = list(skipped.scrubs) if skipped is not None else []
+    code = exit_code(status.problems, status.failures or bool(failed))
+    if code or failed or incomplete or attention:  # never a green line over a failing exit code
+        counts = [f"{len(failed)} could not be started"] if failed else []
+        counts += [f"{len(incomplete)} did not complete or could not be read"] if incomplete else []
+        counts += [f"{len(attention)} skipped by -d {'needs' if len(attention) == 1 else 'need'} attention"] if attention else []
+        counts = counts or (["problems found: see the table and notes above"] if code == EXIT_PROBLEMS
+                            else ["some checks could not be made: see the notes above"])
+        print(f"{RED}Scrubs ended; {', '.join(counts)}.{RESET}")
     else:
         print(f"{GREEN}All scrubs finished.{RESET}")
     for fs in filesystems:
@@ -748,29 +998,40 @@ def scrub_filesystems(filesystems, args, screen):
         else:
             prefix = "was already running; " if mount in adopted else ""
             print(f"  {mount}: {prefix}{describe_scrub(status.scrubs.get(mount))}")
-    return exit_code(status.problems, status.failures or bool(failed))
+    for mount in attention:
+        print(f"  {mount}: {RED}skipped by -d, but it has a problem: see the table above{RESET}")
+    return code
 
-def watch_filesystems(filesystems, args, screen):
+def watch_filesystems(filesystems, args, screen, skipped=None, skipped_filesystems=()):
     """-w: refresh the table until no scrub is running; never starts one. Returns the exit code."""
     mounts = [fs['mounts'][0] for fs in filesystems]
     seen_running = set()
     since = {}
     try:
+        kept = reread_unclear(filesystems, build_status(poll_filesystems(filesystems)), ("interrupted",))
+        status = merge_status(kept, skipped)
         while True:
-            status = build_status(poll_filesystems(filesystems))
             seen_running.update(fs['mounts'][0] for fs in status.running)
             held = held_scrubs(mounts, status, since, seen_running)
             screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
             if not status.running and not held:
+                # The filesystems -d skipped are checked again: the run may have lasted hours.
+                skipped, changed = recheck_skipped(skipped_filesystems, skipped)
+                if changed:
+                    status = merge_status(kept, skipped)
+                    screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
                 return exit_code(status.problems, status.failures)
             time.sleep(args.interval)
+            kept = build_status(poll_filesystems(filesystems))
+            status = merge_status(kept, skipped)
     except KeyboardInterrupt:
         print()
         return EXIT_INTERRUPTED
 
-def scrub_interrupted(started, adopted, running, queue):
+def scrub_interrupted(started, adopted, running, queue, via):
     """Ctrl-C during -s. Scrubs keep running (they run in their own session) unless the user,
-    asked on a terminal, cancels the ones this run started."""
+    asked on a terminal, cancels the ones this run started. via maps a mount to the mount of its filesystem
+    the scrub was started through (the resume advice names that one)."""
     ours = [mount for mount in started if mount in running]
     elsewhere = [mount for mount in adopted if mount in running]
     print()
@@ -791,20 +1052,23 @@ def scrub_interrupted(started, adopted, running, queue):
         if answer.strip().lower() in ("y", "yes"):
             for mount in ours:
                 cancel_scrub(mount)
-                print(f"Cancelled scrub on {mount}")
-            print("A cancelled scrub keeps its progress: continue it with `btrfs scrub resume <mount>`.")
+                print(f"Cancelled scrub on {mount}: it keeps its progress, continue it with "
+                      f"`{' '.join(scrub_command('resume', via[mount]))}`.")
             return EXIT_INTERRUPTED
     if ours or elsewhere:
         print("Scrubs keep running in the background. Stop one with `btrfs scrub cancel <mount>`; "
-              "continue a cancelled one with `btrfs scrub resume <mount>`.")
+              "continue a cancelled one with `btrfs scrub resume <mount>` (`-r` on a read-only mount).")
     return EXIT_INTERRUPTED
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Check Btrfs filesystem status.",
-        epilog="Exit status: 0 healthy; 1 problems found (device errors, scrub errors or missing devices); "
-               "2 the check failed (no matching mounts, an unreadable filesystem, no root); 130 interrupted; "
+        epilog="Exit status: 0 healthy; 1 problems found (device errors, scrub errors, missing devices, or a "
+               "filesystem forced read-only after an error); "
+               "2 the check failed (no matching mounts, an unreadable filesystem, a scrub status that could not be "
+               "read, a scrub that did not complete, an unreadable /proc/self/mountinfo, or a filesystem that could "
+               "not be asked whether it was forced read-only, no root); 130 interrupted; "
                "141 the reader of stdout went away (| head).")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("-s", "--scrub", help="Issue scrub to all pools", action="store_true")
@@ -816,7 +1080,8 @@ def build_parser():
     parser.add_argument(
         "-d",
         "--exclude-recent-scrubbed-days",
-        help="Exclude mounts scrubbed within this many days",
+        help="Leave out of the scrub, and of the table when healthy, mounts scrubbed within this many days; "
+             "they are still checked, and a problem in one is shown and counts in the exit code",
         default=0,
         type=int
     )
@@ -874,18 +1139,22 @@ def run():
             f"{YELLOW}Skipping mounts scrubbed within the last "
             f"{args.exclude_recent_scrubbed_days}d: {'; '.join(sorted(', '.join(fs['mounts']) for fs in skipped))}{RESET}"
         )
+    skipped_status = check_skipped(skipped)
     if not filesystems:
+        if skipped_status is not None:
+            screen.show(multiCMD.pretty_format_table(skipped_status.rows, header=TABLE_HEADER), skipped_status.notes)
+            return exit_code(skipped_status.problems, skipped_status.failures)
         screen.flush()
         print(f"{GREEN}Every matching filesystem was scrubbed within the last "
               f"{args.exclude_recent_scrubbed_days}d; nothing to do.{RESET}")
         return EXIT_OK
 
     if args.scrub:
-        return scrub_filesystems(filesystems, args, screen)
+        return scrub_filesystems(filesystems, args, screen, skipped_status, skipped)
     if args.watch:
-        return watch_filesystems(filesystems, args, screen)
+        return watch_filesystems(filesystems, args, screen, skipped_status, skipped)
 
-    status = build_status(poll_filesystems(filesystems))
+    status = merge_status(reread_unclear(filesystems, build_status(poll_filesystems(filesystems))), skipped_status)
     screen.show(multiCMD.pretty_format_table(status.rows, header=TABLE_HEADER), status.notes)
     return exit_code(status.problems, status.failures)
 

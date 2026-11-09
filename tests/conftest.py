@@ -28,6 +28,32 @@ def _assume_btrfs_installed(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mounts_are_read_write(monkeypatch):
+    """-s asks statvfs() whether a mount is read-only: /mnt/... paths of the tests are fake and read-write unless a
+    test says otherwise, never what the real /mnt/a happens to be."""
+    import types
+
+    import statbtrfs
+
+    real = statbtrfs.os.statvfs
+
+    def statvfs(path):
+        if str(path).startswith("/mnt/"):
+            return types.SimpleNamespace(f_flag=0)
+        return real(path)
+
+    monkeypatch.setattr(statbtrfs.os, "statvfs", statvfs)
+
+
+@pytest.fixture(autouse=True)
+def _no_mount_is_forced_read_only(monkeypatch):
+    """Read /proc/self/mountinfo as listing no btrfs, never what the test host happens to have mounted."""
+    import statbtrfs
+
+    monkeypatch.setattr(statbtrfs, "read_mountinfo", lambda path=None: [], raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _never_start_real_scrubs(monkeypatch):
     """-s tests must fake start_scrub(); never let one reach a real `btrfs scrub start`."""
     import statbtrfs
