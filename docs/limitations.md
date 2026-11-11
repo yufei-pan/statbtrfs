@@ -23,3 +23,14 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
   statbtrfs as root avoids it.
 - Revisit when: an operator hits it on a setup where statbtrfs can't run as root.
 - Approved: 2026-11-08, the user chose "Approve (Recommended)".
+
+### "Cancelled scrub" is printed whatever `btrfs scrub cancel` answered
+- Kind: deferred
+- What the operator sees: a Ctrl-C during `-s`, answered y, makes statbtrfs print "Cancelled scrub on X: it keeps its
+  progress, continue it with `btrfs scrub resume ...`" for each scrub, whatever btrfs said. If the scrub finished while
+  the prompt waited, btrfs said "not running" and the resume advice is wrong; if the cancel failed (the per-command sudo
+  fallback refused it), the scrub is still running while statbtrfs says it was cancelled.
+- Why: `cancel_scrub()` drops the command's output and exit code. Found by the 0.44 final review (read from the code and
+  btrfs-progs' `cmd_scrub_cancel`, which exits non-zero with an error; not run). Not this release's change.
+- Revisit when: 0.45: read the exit code and print what btrfs said when the cancel failed.
+- Noted: 2026-11-11, from the 0.44 final review; a deferral, not asked.
