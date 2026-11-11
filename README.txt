@@ -41,18 +41,17 @@ Upgrading to 0.44 from 0.43:
     fails to import, so multiCMD itself need not be upgraded. Reports and exit codes do not change.
   - The embedded copy now unpacks with zlib, not lzma. statbtrfs no longer fails to start on a Python built
     without lzma (a self-compiled Python without xz-devel) when it uses the embedded copy.
-  - A Ctrl-C can no longer hang statbtrfs. In 0.43, one that landed just as a check started its threads could
-    leave Python's thread-start lock held: statbtrfs then hung at its next command (the scrub cancel after -s),
-    or at exit on Python 3.6, until Ctrl-\. This was rare.
+  - A Ctrl-C can no longer leave Python's thread-start lock held. In 0.43, one that landed just as a check
+    started its threads could: statbtrfs then hung at its next command (the scrub cancel after -s) until a
+    second Ctrl-C, which left the scrub running; on Python 3.6 only Ctrl-\ ended it. This was rare.
   - Python 3.6 to 3.10: a Ctrl-C just as a btrfs command starts no longer crashes the Python that starts it. In
-    0.43 that left a core dump (3.6, 3.7) or "Fatal Python error" (3.8 to 3.10), and on hosts with abrt or
-    systemd-coredump a crash report.
+    0.43 that left a core dump on 3.6 and 3.7, and on hosts with abrt or systemd-coredump a crash report.
   - Python 3.6 to 3.10: a second Ctrl-C while -s cancels its scrubs (after you answered y) can no
     longer leave a `btrfs scrub cancel` running unseen after statbtrfs exits. One that landed as it started
     could in 0.43; now that cancel does not run.
-  - Known, Python 3.6 to 3.10: a Ctrl-C as a btrfs command starts waits for that start, normally about 1 ms.
-    If the Python that statbtrfs runs on sits on an NFS mount that stopped answering, Ctrl-C does nothing until
-    the mount answers.
+  - Known, Python 3.6 to 3.10: a second Ctrl-C just as -s starts a `btrfs scrub cancel` waits for that start,
+    normally about 1 ms. If the Python that statbtrfs runs on sits on an NFS mount that stopped answering, it
+    does nothing until the mount answers (multiCMD's docs/limitations.md).
 
 Upgrading to 0.43 from 0.42:
   - A btrfs that the kernel forced read-only after an error (it then takes no writes) is now reported, in
