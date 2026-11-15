@@ -37,6 +37,10 @@ Known limitation: when each btrfs command has to run through sudo, a missing btr
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
 Upgrading to 0.45 from 0.44:
+  - A Ctrl-C during -s, answered y, now says when a cancel failed: "Could not cancel the scrub on <mount>: <what
+    btrfs said>", and to see where it stands with `btrfs scrub status <mount>`. 0.44 said "Cancelled scrub"
+    whatever btrfs answered, also for a scrub that had finished while the prompt waited (btrfs: "not running") or
+    a cancel that sudo refused, which left the scrub running.
   - The embedded multiCMD is now 1.67. It runs whenever the installed multiCMD is older than 1.67, missing, or
     fails to import. Reports and exit codes do not change.
   - pip no longer installs multiCMD for statbtrfs. The requirement guaranteed nothing, since statbtrfs runs its

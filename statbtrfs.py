@@ -336,9 +336,11 @@ def acquire_root(argv):
 # Each reply is the command's stdout, then its stderr: btrfs reports some failures only there (`scrub
 # status` that failed to read the status file part way still exits 0). The parsers skip lines they don't know.
 def execute_command(command):
+    """(exit code, reply) of one btrfs command."""
     if USE_SUDO:
         command = ['sudo'] + command
-    return multiCMD.run_command(command,quiet=True,with_stdErr=True)
+    task = multiCMD.run_command(command,quiet=True,return_object=True)
+    return task.returncode, task.stdout + task.stderr
 
 def execute_commands(commands):
     if USE_SUDO:
@@ -897,7 +899,14 @@ def start_scrub(mount):
     return 'failed', output.splitlines()[0] if output else f'exit code {returncode}'
 
 def cancel_scrub(mount):
-    execute_command(['btrfs', 'scrub', 'cancel', mount])
+    """`btrfs scrub cancel`: None once it cancelled the scrub, else what it said (its last line, or its exit code).
+    It fails with "not running" for a scrub that ended meanwhile, and behind the per-command sudo fallback when sudo
+    refuses it, leaving the scrub running."""
+    returncode, reply = execute_command(['btrfs', 'scrub', 'cancel', mount])
+    if returncode == 0:
+        return None
+    said = [line.strip() for line in reply if line.strip()]
+    return said[-1] if said else f'exit code {returncode}'
 
 def describe_scrub(scrub_data):
     if scrub_data is None:
@@ -1089,9 +1098,13 @@ def scrub_interrupted(started, adopted, running, queue, via):
             answer = ""
         if answer.strip().lower() in ("y", "yes"):
             for mount in ours:
-                cancel_scrub(mount)
-                print(f"Cancelled scrub on {mount}: it keeps its progress, continue it with "
-                      f"`{' '.join(scrub_command('resume', via[mount]))}`.")
+                failed = cancel_scrub(mount)
+                if failed:
+                    print(f"{RED}Could not cancel the scrub on {mount}: {failed}{RESET} "
+                          f"See where it stands with `btrfs scrub status {mount}`.")
+                else:
+                    print(f"Cancelled scrub on {mount}: it keeps its progress, continue it with "
+                          f"`{' '.join(scrub_command('resume', via[mount]))}`.")
             return EXIT_INTERRUPTED
     if ours or elsewhere:
         print("Scrubs keep running in the background. Stop one with `btrfs scrub cancel <mount>`; "

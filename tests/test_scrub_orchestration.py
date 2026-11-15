@@ -515,6 +515,42 @@ def test_ctrl_c_cancel_names_the_resume_through_the_mount_that_is_not_read_only(
     assert "Cancelled scrub on /mnt/a: it keeps its progress, continue it with `btrfs scrub resume /mnt/b`." in out
 
 
+@pytest.mark.parametrize("reply, said", [
+    # the scrub on /mnt/a finished while the prompt waited
+    ((1, ["ERROR: scrub cancel failed on /mnt/a: not running"]), "ERROR: scrub cancel failed on /mnt/a: not running"),
+    # the per-command sudo fallback, where sudoers does not allow the cancel: the scrub goes on
+    ((1, ["Sorry, user test is not allowed to execute '/usr/sbin/btrfs scrub cancel /mnt/a' as root on host."]),
+     "Sorry, user test is not allowed to execute '/usr/sbin/btrfs scrub cancel /mnt/a' as root on host."),
+    ((1, []), "exit code 1"),
+])
+def test_ctrl_c_cancel_that_failed_says_what_btrfs_answered(monkeypatch, capsys, reply, said):
+    _interactive(monkeypatch, "y")
+    fake = FakeBtrfs(["/mnt/a", "/mnt/b", "/mnt/c", "/mnt/d"], polls=50, running=["/mnt/c"], interrupt_on_sleep=3,
+                     cancel_results={"/mnt/a": reply})
+    fake.install(monkeypatch, statbtrfs)
+    code = _run(monkeypatch, ["-s", "-m", "3", "--scrub_command_lockout", "0", "-i", "1"])
+    out = capsys.readouterr().out
+    assert f"Could not cancel the scrub on /mnt/a: {said}" in out
+    assert "See where it stands with `btrfs scrub status /mnt/a`." in out
+    assert "Cancelled scrub on /mnt/a" not in out
+    assert "Cancelled scrub on /mnt/b: it keeps its progress, continue it with `btrfs scrub resume /mnt/b`." in out
+    assert fake.cancelled == ["/mnt/b"]
+    assert code == statbtrfs.EXIT_INTERRUPTED
+
+
+def test_cancel_scrub_reads_the_exit_code_and_what_btrfs_said(monkeypatch, tmp_path):
+    # Through the real multiCMD: btrfs-progs' cmd_scrub_cancel says "not running" on stderr and exits non-zero.
+    btrfs = tmp_path / "btrfs"
+    btrfs.write_text('#!/bin/sh\n'
+                     'if [ "$3" = /mnt/done ]; then echo "ERROR: scrub cancel failed on $3: not running" >&2; exit 1; fi\n'
+                     'echo "scrub cancelled"\n')
+    btrfs.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
+    assert statbtrfs.cancel_scrub("/mnt/running") is None
+    assert statbtrfs.cancel_scrub("/mnt/done") == "ERROR: scrub cancel failed on /mnt/done: not running"
+
+
 @pytest.mark.parametrize("answer", ["", "n", "no", "anything"])
 def test_ctrl_c_on_terminal_defaults_to_keep_running(monkeypatch, capsys, answer):
     _interactive(monkeypatch, answer)

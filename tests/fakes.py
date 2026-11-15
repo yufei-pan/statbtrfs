@@ -305,7 +305,7 @@ class CommandMap:
 
     def execute_command(self, command):
         self.calls.append(("cmd", list(command)))
-        return self._lookup(command)
+        return 0, self._lookup(command)
 
     def execute_commands(self, commands):
         self.calls.append(("cmds", [list(c) for c in commands]))
@@ -343,11 +343,13 @@ class FakeBtrfs:
     start_scrub() per mount. ``interrupt_on_sleep`` raises KeyboardInterrupt on that sleep (1-based).
     ``old_progs`` answers `btrfs scrub status` as btrfs-progs 4.9.1 does. ``replies`` ({mount: [reply, ...]})
     answers that mount's status polls in turn, ``None`` leaving a poll to the simulation; a scrub goes on
-    underneath.
+    underneath. ``cancel_results`` ({mount: (exit code, reply)}) answers `btrfs scrub cancel` there instead of
+    cancelling.
     """
 
     def __init__(self, mounts, polls=2, running=(), finished=(), errors=(), start_results=None,
-                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0, old_progs=False, replies=None):
+                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0, old_progs=False, replies=None,
+                 cancel_results=None):
         self.mounts = list(mounts)
         self.polls = polls
         self.state = {m: "never" for m in self.mounts}
@@ -368,6 +370,7 @@ class FakeBtrfs:
         self.no_stats_yet = {}
         self.old_progs = old_progs
         self.replies = {m: list(r) for m, r in (replies or {}).items()}
+        self.cancel_results = dict(cancel_results or {})
 
     def _run(self, mount):
         self.state[mount] = "running"
@@ -386,10 +389,12 @@ class FakeBtrfs:
 
     def execute_command(self, command):
         if command[:3] == ["btrfs", "scrub", "cancel"]:
+            if command[3] in self.cancel_results:
+                return self.cancel_results[command[3]]
             self.cancelled.append(command[3])
             self.state[command[3]] = "aborted"
-            return ["scrub cancelled"]
-        return self.execute_commands([command])[0]
+            return 0, ["scrub cancelled"]
+        return 0, self.execute_commands([command])[0]
 
     def execute_commands(self, commands):
         out = [self._answer(c) for c in commands]
