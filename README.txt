@@ -36,6 +36,20 @@ root); 130 interrupted; 141 the reader of stdout went away (| head).
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
+Upgrading to 0.45 from 0.44:
+  - A Ctrl-C during -s, answered y, now says when a cancel failed: "Could not cancel the scrub on <mount>: <what
+    btrfs said>", and to see where it stands with `btrfs scrub status <mount>`. 0.44 said "Cancelled scrub"
+    whatever btrfs answered, also for a scrub that had finished while the prompt waited (btrfs: "not running") or
+    a cancel that sudo refused, which left the scrub running.
+  - The embedded multiCMD is now 1.67. It runs whenever the installed multiCMD is older than 1.67, missing, or
+    fails to import. Reports and exit codes do not change.
+  - pip no longer installs multiCMD for statbtrfs. The requirement guaranteed nothing, since statbtrfs runs its
+    own copy in place of an older one, and with stock pip 9 (EL7, EL8) and multiCMD 1.57 or older installed it
+    stopped `pip3 install -U statbtrfs` with `configparser.DuplicateOptionError`. A multiCMD installed only for
+    statbtrfs can stay or go.
+  - The package names its license as an SPDX expression, `GPL-3.0-or-later` (built with setuptools 77 or
+    later). pip 9 does not read that field: `pip3 show statbtrfs` there says `License: None`.
+
 Upgrading to 0.44 from 0.43:
   - The embedded multiCMD is now 1.61. It runs whenever the installed multiCMD is older than 1.61, missing, or
     fails to import, so multiCMD itself need not be upgraded. Reports and exit codes do not change.
@@ -115,10 +129,9 @@ Upgrading to 0.40 from 0.39:
   - The embedded multiCMD is now 1.58: no change to how commands run. The embedded copy also runs when the
     installed multiCMD fails to import in any way, not only when it is older or missing. multiCMD itself need
     not be upgraded.
-  - With multiCMD 1.57 or earlier installed, pip 9 (stock on EL7 and EL8) without `--user` stops `pip3 install -U statbtrfs` with `configparser.DuplicateOptionError`, because it upgrades dependencies too: use `pip3 install statbtrfs==0.40`, `pip3 install -U --no-deps statbtrfs`, or run `pip3 install -U pip` once. With `--user` it does not stop.
 
 Upgrading to 0.39 from 0.38:
-  - The embedded multiCMD is now 1.57. It runs whenever the installed multiCMD is older, so multiCMD itself need not be upgraded. With multiCMD 1.57 or earlier installed, pip 9 (stock on EL7 and EL8) without `--user` stops `pip3 install -U statbtrfs` with `configparser.DuplicateOptionError`, because it upgrades dependencies too: use `pip3 install statbtrfs==0.39`, `pip3 install -U --no-deps statbtrfs`, or run `pip3 install -U pip` once. With `--user` it does not stop.
+  - The embedded multiCMD is now 1.57. It runs whenever the installed multiCMD is older, so multiCMD itself need not be upgraded.
   - Known: on EL7, btrfs-progs 4.9.1's scrub status is not read, so `-s` can say a scrub finished while it runs and the status columns stay `Never`. A checksum error still shows. Planned for 0.40.
   - Faster command starts on Python 3.6 - 3.10, where the embedded multiCMD 1.57 imports only built-in
     modules in the wrapper that puts each command in its own process group (about 7 ms to 3.5 ms of CPU

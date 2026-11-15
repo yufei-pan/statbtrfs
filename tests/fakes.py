@@ -283,7 +283,7 @@ SUBVOL_SHOWS = {
 
 
 class CommandMap:
-    """Stub for execute_command / execute_commands."""
+    """Stub for execute_command / execute_commands (and, as an exit 0 with the same lookup, the scrub cancel)."""
 
     def __init__(self, mapping=None, default=None):
         self.mapping = dict(mapping or {})
@@ -311,6 +311,9 @@ class CommandMap:
         self.calls.append(("cmds", [list(c) for c in commands]))
         return [self._lookup(c) for c in commands]
 
+    def run_scrub_cancel(self, mount):
+        return 0, self.execute_command(["btrfs", "scrub", "cancel", mount])
+
 
 def install_mounts(monkeypatch, module, lines):
     """Serve ``lines`` as the contents of /proc/self/mounts."""
@@ -331,6 +334,7 @@ def install_status(monkeypatch, module, per_mount):
 def install_command_map(monkeypatch, command_map, module):
     monkeypatch.setattr(module, "execute_command", command_map.execute_command)
     monkeypatch.setattr(module, "execute_commands", command_map.execute_commands)
+    monkeypatch.setattr(module, "_run_scrub_cancel", command_map.run_scrub_cancel)
     return command_map
 
 
@@ -343,11 +347,13 @@ class FakeBtrfs:
     start_scrub() per mount. ``interrupt_on_sleep`` raises KeyboardInterrupt on that sleep (1-based).
     ``old_progs`` answers `btrfs scrub status` as btrfs-progs 4.9.1 does. ``replies`` ({mount: [reply, ...]})
     answers that mount's status polls in turn, ``None`` leaving a poll to the simulation; a scrub goes on
-    underneath.
+    underneath. ``cancel_results`` ({mount: (exit code, reply)}) answers `btrfs scrub cancel` there instead of
+    cancelling.
     """
 
     def __init__(self, mounts, polls=2, running=(), finished=(), errors=(), start_results=None,
-                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0, old_progs=False, replies=None):
+                 clock=1_000_000.0, interrupt_on_sleep=None, stats_delay=0, old_progs=False, replies=None,
+                 cancel_results=None):
         self.mounts = list(mounts)
         self.polls = polls
         self.state = {m: "never" for m in self.mounts}
@@ -368,6 +374,7 @@ class FakeBtrfs:
         self.no_stats_yet = {}
         self.old_progs = old_progs
         self.replies = {m: list(r) for m, r in (replies or {}).items()}
+        self.cancel_results = dict(cancel_results or {})
 
     def _run(self, mount):
         self.state[mount] = "running"
@@ -384,11 +391,14 @@ class FakeBtrfs:
         self.no_stats_yet[mount] = self.stats_delay
         return "started", f"scrub started on {mount}"
 
+    def run_scrub_cancel(self, mount):
+        if mount in self.cancel_results:
+            return self.cancel_results[mount]
+        self.cancelled.append(mount)
+        self.state[mount] = "aborted"
+        return 0, ["scrub cancelled"]
+
     def execute_command(self, command):
-        if command[:3] == ["btrfs", "scrub", "cancel"]:
-            self.cancelled.append(command[3])
-            self.state[command[3]] = "aborted"
-            return ["scrub cancelled"]
         return self.execute_commands([command])[0]
 
     def execute_commands(self, commands):
@@ -440,6 +450,7 @@ class FakeBtrfs:
         monkeypatch.setattr(module, "start_scrub", self.start_scrub)
         monkeypatch.setattr(module, "execute_command", self.execute_command)
         monkeypatch.setattr(module, "execute_commands", self.execute_commands)
+        monkeypatch.setattr(module, "_run_scrub_cancel", self.run_scrub_cancel)
         monkeypatch.setattr(module.time, "time", self.time)
         monkeypatch.setattr(module.time, "sleep", self.sleep)
         monkeypatch.setattr(module.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")

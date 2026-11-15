@@ -1,5 +1,6 @@
 import os
 import sys
+import types
 
 import pytest
 
@@ -75,6 +76,15 @@ def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root):
     monkeypatch.setattr(statbtrfs.multiCMD, "run_command", lambda cmd, **kw: seen.append(cmd) or [])
     statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"])
     assert seen == [["sudo", "btrfs", "scrub", "status", "/mnt/a"]]
+
+
+def test_scrub_cancel_goes_through_per_command_sudo(monkeypatch):
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
+    seen = []
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_command",
+                        lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(returncode=0, stdout=[], stderr=[]))
+    assert statbtrfs.cancel_scrub("/mnt/a") is None
+    assert seen == [["sudo", "btrfs", "scrub", "cancel", "/mnt/a"]]
 
 
 def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
