@@ -36,6 +36,10 @@ root); 130 interrupted; 141 the reader of stdout went away (| head).
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
+Upgrading to 0.45 from 0.44:
+  - The embedded multiCMD is now 1.67. It runs whenever the installed multiCMD is older than 1.67, missing, or
+    fails to import. Reports and exit codes do not change.
+
 Upgrading to 0.44 from 0.43:
   - The embedded multiCMD is now 1.61. It runs whenever the installed multiCMD is older than 1.61, missing, or
     fails to import, so multiCMD itself need not be upgraded. Reports and exit codes do not change.
