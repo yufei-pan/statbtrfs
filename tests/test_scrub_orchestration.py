@@ -530,7 +530,7 @@ def test_ctrl_c_cancel_that_failed_says_what_btrfs_answered(monkeypatch, capsys,
     fake.install(monkeypatch, statbtrfs)
     code = _run(monkeypatch, ["-s", "-m", "3", "--scrub_command_lockout", "0", "-i", "1"])
     out = capsys.readouterr().out
-    assert f"Could not cancel the scrub on /mnt/a: {said}" in out
+    assert f"Could not cancel the scrub on /mnt/a: {said.rstrip('.')}.\x1b[0m See where it stands" in out
     assert "See where it stands with `btrfs scrub status /mnt/a`." in out
     assert "Cancelled scrub on /mnt/a" not in out
     assert "Cancelled scrub on /mnt/b: it keeps its progress, continue it with `btrfs scrub resume /mnt/b`." in out

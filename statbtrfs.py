@@ -1100,7 +1100,7 @@ def scrub_interrupted(started, adopted, running, queue, via):
             for mount in ours:
                 failed = cancel_scrub(mount)
                 if failed:
-                    print(f"{RED}Could not cancel the scrub on {mount}: {failed}{RESET} "
+                    print(f"{RED}Could not cancel the scrub on {mount}: {failed.rstrip('.')}.{RESET} "
                           f"See where it stands with `btrfs scrub status {mount}`.")
                 else:
                     print(f"Cancelled scrub on {mount}: it keeps its progress, continue it with "
