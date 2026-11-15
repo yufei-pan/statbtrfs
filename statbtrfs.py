@@ -905,9 +905,7 @@ def _run_scrub_cancel(mount):
     return task.returncode, task.stdout + task.stderr
 
 def cancel_scrub(mount):
-    """`btrfs scrub cancel`: None once it cancelled the scrub, else what it said (its last line, or its exit code).
-    It fails with "not running" for a scrub that ended meanwhile, and behind the per-command sudo fallback when sudo
-    refuses it, leaving the scrub running."""
+    """None once btrfs cancelled the scrub, else the last line btrfs (or sudo) printed, or its exit code."""
     returncode, reply = _run_scrub_cancel(mount)
     if returncode == 0:
         return None
