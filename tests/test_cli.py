@@ -142,6 +142,9 @@ def test_main_lists_each_filesystem_once(monkeypatch):
 
 def test_main_scrub_starts_once_per_filesystem(monkeypatch):
     install_command_map(monkeypatch, _subvol_status_map(monkeypatch), statbtrfs)
+    # The mounts are fake: never ask the host whether its own / is read-only (it is on macOS, and in a read-only
+    # container), which would send the scrub through /home.
+    monkeypatch.setattr(statbtrfs, "is_read_only", lambda mount: False)
     starts = []
     monkeypatch.setattr(statbtrfs, "start_scrub", lambda mount: starts.append(mount) or ("started", ""))
     clock = {"now": 1_000_000.0}
