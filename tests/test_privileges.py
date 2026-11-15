@@ -73,10 +73,18 @@ def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root):
     assert non_root == []
     assert statbtrfs.USE_SUDO is True
     seen = []
-    monkeypatch.setattr(statbtrfs.multiCMD, "run_command",
-                        lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(returncode=0, stdout=[], stderr=[]))
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_command", lambda cmd, **kw: seen.append(cmd) or [])
     statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"])
     assert seen == [["sudo", "btrfs", "scrub", "status", "/mnt/a"]]
+
+
+def test_scrub_cancel_goes_through_per_command_sudo(monkeypatch):
+    monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
+    seen = []
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_command",
+                        lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(returncode=0, stdout=[], stderr=[]))
+    assert statbtrfs.cancel_scrub("/mnt/a") is None
+    assert seen == [["sudo", "btrfs", "scrub", "cancel", "/mnt/a"]]
 
 
 def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
@@ -103,9 +111,7 @@ def test_btrfs_replies_carry_stderr_after_stdout(monkeypatch):
     def run_commands(cmds, with_stdErr=False, **kw):
         return [stdout[c[2]] + (stderr.get(c[2], []) if with_stdErr else []) for c in cmds]
 
-    def run_command(cmd, with_stdErr=False, return_object=False, **kw):
-        if return_object:
-            return types.SimpleNamespace(returncode=0, stdout=stdout[cmd[2]], stderr=stderr.get(cmd[2], []))
+    def run_command(cmd, with_stdErr=False, **kw):
         return run_commands([cmd], with_stdErr=with_stdErr)[0]
 
     monkeypatch.setattr(statbtrfs.multiCMD, "run_commands", run_commands)
@@ -114,4 +120,4 @@ def test_btrfs_replies_carry_stderr_after_stdout(monkeypatch):
     status = statbtrfs.build_status(statbtrfs.poll_filesystems([fs]))
     assert status.scrubs["/mnt/a"]["scrub_status"] == "unknown"
     assert status.failures is True
-    assert statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"]) == (0, SCRUB_FAILED_READ_MODERN)
+    assert statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"]) == SCRUB_FAILED_READ_MODERN

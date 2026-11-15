@@ -336,11 +336,9 @@ def acquire_root(argv):
 # Each reply is the command's stdout, then its stderr: btrfs reports some failures only there (`scrub
 # status` that failed to read the status file part way still exits 0). The parsers skip lines they don't know.
 def execute_command(command):
-    """(exit code, reply) of one btrfs command."""
     if USE_SUDO:
         command = ['sudo'] + command
-    task = multiCMD.run_command(command,quiet=True,return_object=True)
-    return task.returncode, task.stdout + task.stderr
+    return multiCMD.run_command(command,quiet=True,with_stdErr=True)
 
 def execute_commands(commands):
     if USE_SUDO:
@@ -898,11 +896,19 @@ def start_scrub(mount):
         return 'running', output
     return 'failed', output.splitlines()[0] if output else f'exit code {returncode}'
 
+def _run_scrub_cancel(mount):
+    """(exit code, reply lines) of `btrfs scrub cancel`: the exit code is what execute_command() does not return."""
+    command = ['btrfs', 'scrub', 'cancel', mount]
+    if USE_SUDO:
+        command = ['sudo'] + command
+    task = multiCMD.run_command(command,quiet=True,return_object=True)
+    return task.returncode, task.stdout + task.stderr
+
 def cancel_scrub(mount):
     """`btrfs scrub cancel`: None once it cancelled the scrub, else what it said (its last line, or its exit code).
     It fails with "not running" for a scrub that ended meanwhile, and behind the per-command sudo fallback when sudo
     refuses it, leaving the scrub running."""
-    returncode, reply = execute_command(['btrfs', 'scrub', 'cancel', mount])
+    returncode, reply = _run_scrub_cancel(mount)
     if returncode == 0:
         return None
     said = [line.strip() for line in reply if line.strip()]

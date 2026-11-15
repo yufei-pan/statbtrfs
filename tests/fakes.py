@@ -283,7 +283,7 @@ SUBVOL_SHOWS = {
 
 
 class CommandMap:
-    """Stub for execute_command / execute_commands."""
+    """Stub for execute_command / execute_commands (and, as an exit 0 with the same lookup, the scrub cancel)."""
 
     def __init__(self, mapping=None, default=None):
         self.mapping = dict(mapping or {})
@@ -305,11 +305,14 @@ class CommandMap:
 
     def execute_command(self, command):
         self.calls.append(("cmd", list(command)))
-        return 0, self._lookup(command)
+        return self._lookup(command)
 
     def execute_commands(self, commands):
         self.calls.append(("cmds", [list(c) for c in commands]))
         return [self._lookup(c) for c in commands]
+
+    def run_scrub_cancel(self, mount):
+        return 0, self.execute_command(["btrfs", "scrub", "cancel", mount])
 
 
 def install_mounts(monkeypatch, module, lines):
@@ -331,6 +334,7 @@ def install_status(monkeypatch, module, per_mount):
 def install_command_map(monkeypatch, command_map, module):
     monkeypatch.setattr(module, "execute_command", command_map.execute_command)
     monkeypatch.setattr(module, "execute_commands", command_map.execute_commands)
+    monkeypatch.setattr(module, "_run_scrub_cancel", command_map.run_scrub_cancel)
     return command_map
 
 
@@ -387,14 +391,15 @@ class FakeBtrfs:
         self.no_stats_yet[mount] = self.stats_delay
         return "started", f"scrub started on {mount}"
 
+    def run_scrub_cancel(self, mount):
+        if mount in self.cancel_results:
+            return self.cancel_results[mount]
+        self.cancelled.append(mount)
+        self.state[mount] = "aborted"
+        return 0, ["scrub cancelled"]
+
     def execute_command(self, command):
-        if command[:3] == ["btrfs", "scrub", "cancel"]:
-            if command[3] in self.cancel_results:
-                return self.cancel_results[command[3]]
-            self.cancelled.append(command[3])
-            self.state[command[3]] = "aborted"
-            return 0, ["scrub cancelled"]
-        return 0, self.execute_commands([command])[0]
+        return self.execute_commands([command])[0]
 
     def execute_commands(self, commands):
         out = [self._answer(c) for c in commands]
@@ -445,6 +450,7 @@ class FakeBtrfs:
         monkeypatch.setattr(module, "start_scrub", self.start_scrub)
         monkeypatch.setattr(module, "execute_command", self.execute_command)
         monkeypatch.setattr(module, "execute_commands", self.execute_commands)
+        monkeypatch.setattr(module, "_run_scrub_cancel", self.run_scrub_cancel)
         monkeypatch.setattr(module.time, "time", self.time)
         monkeypatch.setattr(module.time, "sleep", self.sleep)
         monkeypatch.setattr(module.multiCMD, "pretty_format_table", lambda rows, header=None: "TABLE")

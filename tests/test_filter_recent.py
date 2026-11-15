@@ -13,7 +13,7 @@ def _serve_scrub_status(monkeypatch, responses):
     def fake_execs(commands):
         return [fake_exec(c) for c in commands]
 
-    monkeypatch.setattr(statbtrfs, "execute_command", lambda command: (0, fake_exec(command)))
+    monkeypatch.setattr(statbtrfs, "execute_command", fake_exec)
     monkeypatch.setattr(statbtrfs, "execute_commands", fake_execs)
 
 
