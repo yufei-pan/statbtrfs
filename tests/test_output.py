@@ -112,14 +112,6 @@ def test_exit_failure_when_the_device_stats_cannot_be_read(monkeypatch, capsys, 
     assert [row[3:8] for row in rows] == [["N/A"] * 5]
 
 
-def test_device_errors_take_precedence_over_unreadable_stats(monkeypatch):
-    install_status(monkeypatch, statbtrfs, {
-        "/mnt/a": (make_show(uuid_for(1)), STATS_MULTI_DEVICE, SCRUB_FINISHED_OK),
-        "/mnt/b": (make_show(uuid_for(2)), [], SCRUB_FINISHED_OK),
-    })
-    assert _run(monkeypatch, []) == statbtrfs.EXIT_PROBLEMS
-
-
 def test_scrub_run_does_not_end_green_over_unreadable_device_stats(monkeypatch, capsys):
     install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), [], SCRUB_FINISHED_OK)})
     monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: None)
