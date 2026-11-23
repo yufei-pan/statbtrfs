@@ -37,16 +37,19 @@ Known limitation: when each btrfs command has to run through sudo, a missing btr
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
 Deferred to 0.47: when each btrfs command has to run through sudo, -s starts no scrub while sudo wants a
-password for btrfs; run `sudo statbtrfs -s`, or let sudo run btrfs with NOPASSWD (see docs/limitations.md).
+password for btrfs. Until then, run statbtrfs as root or let sudo run it, or let sudo run btrfs with NOPASSWD
+(see docs/limitations.md). Also deferred: naming sudo's refusal in the notes of a status that could not be read.
 
 Upgrading to 0.46 from 0.45:
-  - When each btrfs command has to run through sudo (statbtrfs run by a user whose sudo allows btrfs but not
-    statbtrfs), it now runs through `sudo -n`: sudo never asks for a password mid-run. A command sudo wants one
-    for fails at once, with "Could not fetch complete info for <mount>", "Could not start scrub on <mount>:
-    sudo: a password is required" or "Could not cancel the scrub on <mount>: sudo: a password is required.".
-    0.45 hung there until a Ctrl-C, newer sudo under a prompt that took no answer and showed a password typed
-    into it. Only commands sudo had no remembered password for were affected: sudo set to ask every time
-    (timestamp_timeout=0), or a Ctrl-C cancel answered after the remembered password ran out.
+  - When each btrfs command has to run through sudo (sudo allows btrfs but not statbtrfs, or statbtrfs's input
+    is not the terminal), a command that sudo wants a password for now fails at once instead of hanging: on a
+    terminal the status and cancel commands run through `sudo -n`. statbtrfs then says "Could not fetch
+    complete info for <mount>" or "Could not cancel the scrub on <mount>: sudo: a password is required.".
+    0.45 waited there until a Ctrl-C, newer sudo under a prompt that took no answer and showed a password typed
+    into it.
+  - A `btrfs device stats` that printed no counter (sudo refused that one command, or btrfs failed) no longer
+    reads as 0 errors in every column with exit 0: its row says N/A, a note says "Could not read the device
+    stats of <mount>.", and the exit code is 2 (1 when a problem is found elsewhere).
   - The embedded multiCMD is now 1.69. It runs whenever the installed multiCMD is older than 1.69, missing, or
     fails to import. Reports and exit codes do not change.
 
