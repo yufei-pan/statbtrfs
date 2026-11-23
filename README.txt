@@ -36,6 +36,20 @@ root); 130 interrupted; 141 the reader of stdout went away (| head).
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
+Deferred to 0.47: when each btrfs command has to run through sudo, -s starts a scrub only if sudo runs btrfs
+without a password (NOPASSWD); otherwise run `sudo statbtrfs -s` (see docs/limitations.md).
+
+Upgrading to 0.46 from 0.45:
+  - When each btrfs command has to run through sudo (statbtrfs run by a user whose sudo allows btrfs but not
+    statbtrfs), it now runs through `sudo -n`: sudo never asks for a password mid-run. A command sudo wants one
+    for fails at once, with "Could not fetch complete info for <mount>", "Could not start scrub on <mount>:
+    sudo: a password is required" or "Could not cancel the scrub on <mount>: sudo: a password is required.".
+    0.45 hung there until a Ctrl-C, under a sudo prompt that took no answer and showed a password typed into
+    it. Only commands sudo had no remembered password for were affected: sudo set to ask every time
+    (timestamp_timeout=0), or a Ctrl-C cancel answered after the remembered password ran out.
+  - The embedded multiCMD is now 1.69. It runs whenever the installed multiCMD is older than 1.69, missing, or
+    fails to import. Reports and exit codes do not change.
+
 Upgrading to 0.45 from 0.44:
   - A Ctrl-C during -s, answered y, now says when a cancel failed: "Could not cancel the scrub on <mount>: <what
     btrfs said>", and to see where it stands with `btrfs scrub status <mount>`. 0.44 said "Cancelled scrub"
