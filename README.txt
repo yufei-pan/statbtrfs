@@ -58,7 +58,7 @@ Upgrading to 0.46 from 0.45:
   - A `btrfs device stats` that printed no counter (sudo refused that one command, or btrfs failed) no longer
     reads as 0 errors in every column with exit 0: its row says N/A, a note says "Could not read the device
     stats of <mount>.", and the exit code is 2 (1 when a problem is found elsewhere).
-  - The embedded multiCMD is now 1.69. It runs whenever the installed multiCMD is older than 1.69, missing, or
+  - The embedded multiCMD is now 1.70. It runs whenever the installed multiCMD is older than 1.70, missing, or
     fails to import. Reports and exit codes do not change.
 
 Upgrading to 0.45 from 0.44:
