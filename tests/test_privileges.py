@@ -25,6 +25,17 @@ def non_root(monkeypatch):
     return execs
 
 
+def _fake_run_command(seen, returncode=0, stdout=(), stderr=()):
+    """multiCMD.run_command as statbtrfs calls it: records each command, and answers in the shape its flags ask for, as
+    the real one does (with return_object the task, else the stdout lines, then the stderr's with with_stdErr)."""
+    def run_command(command, with_stdErr=False, return_object=False, **kw):
+        seen.append(command)
+        if return_object:
+            return types.SimpleNamespace(returncode=returncode, stdout=list(stdout), stderr=list(stderr))
+        return list(stdout) + (list(stderr) if with_stdErr else [])
+    return run_command
+
+
 def _sudo_list_returns(monkeypatch, code, tty=True):
     checks = []
     monkeypatch.setattr(statbtrfs.subprocess, "call", lambda cmd, **kw: checks.append(cmd) or code)
@@ -73,18 +84,18 @@ def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root):
     assert non_root == []
     assert statbtrfs.USE_SUDO is True
     seen = []
-    monkeypatch.setattr(statbtrfs.multiCMD, "run_command", lambda cmd, **kw: seen.append(cmd) or [])
-    statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"])
-    assert seen == [["sudo", "btrfs", "scrub", "status", "/mnt/a"]]
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_command", _fake_run_command(seen, stdout=["out"], stderr=["err"]))
+    assert statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"]) == ["out", "err"]
+    # -n: a sudo that wants a password fails at once; in multiCMD's process group it would stop at its prompt
+    assert seen == [["sudo", "-n", "btrfs", "scrub", "status", "/mnt/a"]]
 
 
 def test_scrub_cancel_goes_through_per_command_sudo(monkeypatch):
     monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
     seen = []
-    monkeypatch.setattr(statbtrfs.multiCMD, "run_command",
-                        lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(returncode=0, stdout=[], stderr=[]))
+    monkeypatch.setattr(statbtrfs.multiCMD, "run_command", _fake_run_command(seen))
     assert statbtrfs.cancel_scrub("/mnt/a") is None
-    assert seen == [["sudo", "btrfs", "scrub", "cancel", "/mnt/a"]]
+    assert seen == [["sudo", "-n", "btrfs", "scrub", "cancel", "/mnt/a"]]
 
 
 def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
@@ -97,7 +108,7 @@ def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
 
     monkeypatch.setattr(statbtrfs.multiCMD, "run_commands", fake_run_commands)
     statbtrfs.execute_commands([["btrfs", "device", "stats", "/mnt/a"]])
-    assert seen["cmds"] == [["sudo", "btrfs", "device", "stats", "/mnt/a"]]
+    assert seen["cmds"] == [["sudo", "-n", "btrfs", "device", "stats", "/mnt/a"]]
     assert seen["kw"]["max_threads"] == statbtrfs.MAX_PARALLEL_COMMANDS
 
 
@@ -108,11 +119,13 @@ def test_btrfs_replies_carry_stderr_after_stdout(monkeypatch):
     stdout = {"show": SHOW_SINGLE, "stats": STATS_ZERO, "status": SCRUB_FAILED_READ_MODERN[:-1]}
     stderr = {"status": SCRUB_FAILED_READ_MODERN[-1:]}
 
-    def run_commands(cmds, with_stdErr=False, **kw):
+    def run_commands(cmds, with_stdErr=False, return_object=False, **kw):
+        if return_object:
+            return [types.SimpleNamespace(returncode=0, stdout=stdout[c[2]], stderr=stderr.get(c[2], [])) for c in cmds]
         return [stdout[c[2]] + (stderr.get(c[2], []) if with_stdErr else []) for c in cmds]
 
-    def run_command(cmd, with_stdErr=False, **kw):
-        return run_commands([cmd], with_stdErr=with_stdErr)[0]
+    def run_command(cmd, **kw):
+        return run_commands([cmd], **kw)[0]
 
     monkeypatch.setattr(statbtrfs.multiCMD, "run_commands", run_commands)
     monkeypatch.setattr(statbtrfs.multiCMD, "run_command", run_command)

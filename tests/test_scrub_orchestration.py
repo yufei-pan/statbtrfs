@@ -88,7 +88,7 @@ def test_run_detached_prefixes_sudo_in_per_command_mode(monkeypatch):
     seen = []
     monkeypatch.setattr(statbtrfs.subprocess, "call", lambda cmd, **kw: seen.append((cmd, kw)) or 0)
     run_detached(["btrfs", "scrub", "start", "/mnt/a"])
-    assert seen[0][0] == ["sudo", "btrfs", "scrub", "start", "/mnt/a"]
+    assert seen[0][0] == ["sudo", "-n", "btrfs", "scrub", "start", "/mnt/a"]
     assert seen[0][1]["start_new_session"] is True
 
 
@@ -513,6 +513,34 @@ def test_ctrl_c_cancel_names_the_resume_through_the_mount_that_is_not_read_only(
     assert _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"]) == statbtrfs.EXIT_INTERRUPTED
     out = capsys.readouterr().out
     assert "Cancelled scrub on /mnt/a: it keeps its progress, continue it with `btrfs scrub resume /mnt/b`." in out
+
+
+def test_ctrl_c_cancel_that_failed_on_a_filesystem_of_two_mounts_names_its_first(monkeypatch, capsys):
+    # The scrub went through /mnt/b (/mnt/a is read-only) and ended while the question waited: the failure and its
+    # advice name /mnt/a, the filesystem's first mount, as its row does; nothing says it was cancelled.
+    _mounted(monkeypatch, read_only={"/mnt/a"})
+    _interactive(monkeypatch, "y")
+    show = make_show(uuid_for(1))
+    cm = install_status(monkeypatch, statbtrfs, {m: (show, STATS_ZERO, SCRUB_RUNNING) for m in ("/mnt/a", "/mnt/b")})
+    cancel = ("btrfs", "scrub", "cancel", "/mnt/a")
+    cm.mapping[cancel] = ["ERROR: scrub cancel failed on /mnt/a: not running"]
+    cm.returncodes[cancel] = 2
+    monkeypatch.setattr(statbtrfs, "run_detached", lambda cmd: (0, "scrub started"))
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(statbtrfs.time, "sleep", sleep)
+    assert _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"]) == statbtrfs.EXIT_INTERRUPTED
+    out = capsys.readouterr().out
+    assert ("Could not cancel the scrub on /mnt/a: ERROR: scrub cancel failed on /mnt/a: not running."
+            in out.replace(statbtrfs.RESET, ""))
+    assert "See where it stands with `btrfs scrub status /mnt/a`." in out
+    assert "Cancelled scrub" not in out
+    assert ("cmd", ["btrfs", "scrub", "cancel", "/mnt/a"]) in cm.calls
 
 
 @pytest.mark.parametrize("reply, said", [
