@@ -49,10 +49,13 @@ def _fake_run_command(seen, returncode=0, stdout=(), stderr=()):
     return run_command
 
 
-def _sudo_list_returns(monkeypatch, code, tty=True):
+def _sudo_list_returns(monkeypatch, code, tty=True, foreground=False):
+    """sudo -l answers `code`; stdin is a terminal or not, and statbtrfs holds its controlling terminal's foreground or
+    not (both forced: never what the machine that runs the tests has)."""
     checks = []
     monkeypatch.setattr(statbtrfs.subprocess, "call", lambda cmd, **kw: checks.append(cmd) or code)
     monkeypatch.setattr(statbtrfs.sys.stdin, "isatty", lambda: tty, raising=False)
+    monkeypatch.setattr(statbtrfs, "_in_foreground", lambda: foreground)
     return checks
 
 
@@ -82,11 +85,18 @@ def test_acquire_root_reexecs_when_sudo_allows_it(monkeypatch, non_root):
     assert non_root == [("/usr/bin/sudo", ["/usr/bin/sudo", "--", sys.executable, script, "-s", "pool"])]
 
 
-def test_acquire_root_never_prompts_without_a_tty(monkeypatch, non_root):
-    checks = _sudo_list_returns(monkeypatch, 0, tty=False)
+@pytest.mark.parametrize("tty,foreground,asks", [
+    (True, True, True),     # statbtrfs in a terminal
+    (True, False, True),    # `statbtrfs &` from an interactive shell: stdin is the terminal, sudo stops at its prompt, and
+                            # `fg` goes on; `-n -l` would refuse a sudo that authenticates with no question
+    (False, True, True),    # `statbtrfs </dev/null`, a pipe, nohup: sudo asks on the terminal, not on stdin
+    (False, False, False),  # cron, `ssh host statbtrfs`, `statbtrfs </dev/null &`: nobody to ask
+], ids=["terminal", "background-with-stdin-terminal", "foreground-stdin-elsewhere", "no-one-to-ask"])
+def test_acquire_root_asks_for_a_password_only_where_someone_can_answer(monkeypatch, non_root, tty, foreground, asks):
+    checks = _sudo_list_returns(monkeypatch, 0, tty=tty, foreground=foreground)
     with pytest.raises(Execv):
         statbtrfs.acquire_root([])
-    assert checks[0][:3] == ["/usr/bin/sudo", "-n", "-l"]
+    assert checks[0][:3] == (["/usr/bin/sudo", "-l", "--"] if asks else ["/usr/bin/sudo", "-n", "-l"])
 
 
 def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root, terminal):
@@ -146,6 +156,66 @@ def test_has_terminal_is_whether_dev_tty_opens_not_whether_stdin_is_one(monkeypa
     monkeypatch.setattr(statbtrfs.sys.stdin, "isatty", lambda: True, raising=False)
     outcome = "none"
     assert statbtrfs._has_terminal() is False
+
+
+@pytest.mark.parametrize("outcome", ["ours", "another-group", "no-terminal", "unreadable"])
+def test_in_foreground_is_whether_our_group_is_the_terminals(monkeypatch, outcome):
+    real_open, opened, closed = os.open, [], []
+
+    def fake_open(path, flags, *a, **k):
+        if path != "/dev/tty":
+            return real_open(path, flags, *a, **k)
+        opened.append(flags)
+        if outcome == "no-terminal":
+            raise OSError(6, "No such device or address")
+        return 99
+
+    def tcgetpgrp(fd):
+        assert fd == 99
+        if outcome == "unreadable":
+            raise OSError(25, "Inappropriate ioctl for device")
+        return 4000 if outcome == "ours" else 4001
+
+    monkeypatch.setattr(statbtrfs.os, "open", fake_open)
+    monkeypatch.setattr(statbtrfs.os, "close", lambda fd: closed.append(fd))
+    monkeypatch.setattr(statbtrfs.os, "tcgetpgrp", tcgetpgrp)
+    monkeypatch.setattr(statbtrfs.os, "getpgrp", lambda: 4000)
+    monkeypatch.setattr(statbtrfs.os, "getpid", lambda: 4001)  # the group is asked for, not the process
+    assert statbtrfs._in_foreground() is (outcome == "ours")
+    assert opened == [os.O_RDWR | os.O_NOCTTY]  # not to make it ours
+    assert closed == ([] if outcome == "no-terminal" else [99])
+
+
+_REAL_TERMINAL_CHILD = """
+import fcntl, os, sys, termios
+sys.path.insert(0, sys.argv[1])
+import statbtrfs
+fcntl.ioctl(os.open(sys.argv[2], os.O_RDWR | os.O_NOCTTY), termios.TIOCSCTTY, 0)  # a session leader: now our terminal
+reader, writer = os.pipe()
+if os.fork() == 0:
+    os.setpgid(0, 0)  # a group of its own, which is not the terminal's foreground
+    os.write(writer, b"background=%d" % statbtrfs._in_foreground())
+    os._exit(0)
+os.wait()
+print("foreground=%d" % statbtrfs._in_foreground(), os.read(reader, 64).decode())
+"""
+
+
+def test_in_foreground_on_a_real_terminal():
+    import pty
+    import subprocess
+    try:
+        master, slave = pty.openpty()
+    except OSError as e:
+        pytest.skip(f"no pseudo-terminal here: {e}")
+    try:
+        done = subprocess.run([sys.executable, "-c", _REAL_TERMINAL_CHILD, os.path.dirname(statbtrfs.__file__),
+                               os.ttyname(slave)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True, start_new_session=True, timeout=60)
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert done.stdout.split() == ["foreground=1", "background=0"], done.stderr
 
 
 def test_btrfs_replies_carry_stderr_after_stdout(monkeypatch):

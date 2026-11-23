@@ -334,11 +334,26 @@ def acquire_root(argv):
         print(f"{RED}statbtrfs needs root: run it as root or install sudo.{RESET}")
         sys.exit(EXIT_FAILURE)
     command = [sys.executable, os.path.abspath(__file__)] + list(argv)
-    # -l: may the user run this exact command? Without a terminal, never wait for a password.
-    check = [sudo, '-l', '--'] if sys.stdin.isatty() else [sudo, '-n', '-l', '--']
+    # -l: may the user run this exact command? sudo asks on the terminal, not on stdin: wherever we hold the terminal
+    # (a terminal on stdin, or statbtrfs </dev/null, a pipe, nohup) it may ask; elsewhere never wait for a password.
+    check = [sudo, '-l', '--'] if sys.stdin.isatty() or _in_foreground() else [sudo, '-n', '-l', '--']
     if subprocess.call(check + command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
         os.execv(sudo, [sudo, '--'] + command)
     USE_SUDO = True
+
+def _in_foreground():
+    """Whether statbtrfs is in the foreground process group of its controlling terminal: sudo can ask there, and
+    in the background (`statbtrfs &` from a script) it would stop at its prompt."""
+    try:
+        fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return False
+    try:
+        return os.tcgetpgrp(fd) == os.getpgrp()
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
 
 def _has_terminal():
     """Whether statbtrfs has a controlling terminal (/dev/tty opens). That is not whether stdin is one:
