@@ -8,7 +8,7 @@ Open work lives here and nowhere else (RULES, "Long work: the progress file"). E
 ## Open work
 
 ### statbtrfs 0.46 (no written plan; the main session's list from the 0.45 reviews)
-- **Small items from the 0.45 reviews.** State: not started. Where:
+- **Small items from the 0.45 reviews, and the embedded multiCMD 1.69 (v1.70 if it is released before the review).** State: building on feat/046 (2026-11-23). Where:
   - A sudo password prompt from the per-command sudo fallback runs in multiCMD's own process group with stdin from /dev/null; check on a real terminal whether the prompt reaches it, and whether a Ctrl-C cancel can stop there (0.45 second opinion, from reading only; the same spawn path as every sudo call since the fallback came).
   - `cancel_scrub()`'s docstring says the reply is the last line btrfs or sudo printed; with btrfs or sudo missing it is multiCMD's own error text.
   - Tests: tests/test_filter_recent.py:16 patches `execute_command()`, which nothing calls now; the run_command fakes in tests/test_privileges.py ignore `return_object`; `CommandMap.run_scrub_cancel` cannot model a failed cancel.
