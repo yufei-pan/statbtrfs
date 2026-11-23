@@ -53,8 +53,8 @@ Upgrading to 0.46 from 0.45:
     through `sudo -n`. statbtrfs then says "Could not fetch complete info for <mount>" or "Could not cancel the
     scrub on <mount>: sudo: a password is required.". 0.45 waited there until a Ctrl-C, newer sudo under a
     prompt that took no answer and showed a password typed into it.
-  - sudo is now asked at the start wherever statbtrfs holds the terminal, also when its input is not the
-    terminal (`statbtrfs </dev/null`, a pipe). 0.45 asked nothing there: a sudo that wanted a password
+  - sudo is now asked at the start when statbtrfs runs in the foreground of a terminal, also when its input is
+    not the terminal (`statbtrfs </dev/null`, a pipe). 0.45 asked nothing there: a sudo that wanted a password
     hung at the first command.
   - A `btrfs device stats` that printed no counter (sudo refused that one command, or btrfs failed) no longer
     reads as 0 errors in every column with exit 0: its row says N/A, a note says "Could not read the device
