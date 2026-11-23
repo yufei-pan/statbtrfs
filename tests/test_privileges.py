@@ -25,6 +25,19 @@ def non_root(monkeypatch):
     return execs
 
 
+@pytest.fixture(params=[True, False], ids=["terminal", "no-terminal"])
+def terminal(request, monkeypatch):
+    """Both outcomes of the check for a controlling terminal, forced."""
+    monkeypatch.setattr(statbtrfs, "_has_terminal", lambda: request.param)
+    return request.param
+
+
+def _sudo(terminal):
+    """The per-command sudo of a command multiCMD runs: `sudo -n` while statbtrfs has a terminal, where sudo could stop
+    at a prompt (in multiCMD's process group it can't read the terminal); plain sudo without one, where it can't."""
+    return ["sudo", "-n"] if terminal else ["sudo"]
+
+
 def _fake_run_command(seen, returncode=0, stdout=(), stderr=()):
     """multiCMD.run_command as statbtrfs calls it: records each command, and answers in the shape its flags ask for, as
     the real one does (with return_object the task, else the stdout lines, then the stderr's with with_stdErr)."""
@@ -76,7 +89,7 @@ def test_acquire_root_never_prompts_without_a_tty(monkeypatch, non_root):
     assert checks[0][:3] == ["/usr/bin/sudo", "-n", "-l"]
 
 
-def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root):
+def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root, terminal):
     # e.g. sudoers allows only /usr/bin/btrfs: re-running the script is refused
     _sudo_list_returns(monkeypatch, 1)
     monkeypatch.setattr(statbtrfs, "USE_SUDO", False)
@@ -86,19 +99,18 @@ def test_acquire_root_falls_back_to_per_command_sudo(monkeypatch, non_root):
     seen = []
     monkeypatch.setattr(statbtrfs.multiCMD, "run_command", _fake_run_command(seen, stdout=["out"], stderr=["err"]))
     assert statbtrfs.execute_command(["btrfs", "scrub", "status", "/mnt/a"]) == ["out", "err"]
-    # -n: a sudo that wants a password fails at once; in multiCMD's process group it would stop at its prompt
-    assert seen == [["sudo", "-n", "btrfs", "scrub", "status", "/mnt/a"]]
+    assert seen == [_sudo(terminal) + ["btrfs", "scrub", "status", "/mnt/a"]]
 
 
-def test_scrub_cancel_goes_through_per_command_sudo(monkeypatch):
+def test_scrub_cancel_goes_through_per_command_sudo(monkeypatch, terminal):
     monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
     seen = []
     monkeypatch.setattr(statbtrfs.multiCMD, "run_command", _fake_run_command(seen))
     assert statbtrfs.cancel_scrub("/mnt/a") is None
-    assert seen == [["sudo", "-n", "btrfs", "scrub", "cancel", "/mnt/a"]]
+    assert seen == [_sudo(terminal) + ["btrfs", "scrub", "cancel", "/mnt/a"]]
 
 
-def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
+def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch, terminal):
     monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
     seen = {}
 
@@ -108,8 +120,32 @@ def test_execute_commands_prefixes_sudo_and_caps_parallelism(monkeypatch):
 
     monkeypatch.setattr(statbtrfs.multiCMD, "run_commands", fake_run_commands)
     statbtrfs.execute_commands([["btrfs", "device", "stats", "/mnt/a"]])
-    assert seen["cmds"] == [["sudo", "-n", "btrfs", "device", "stats", "/mnt/a"]]
+    assert seen["cmds"] == [_sudo(terminal) + ["btrfs", "device", "stats", "/mnt/a"]]
     assert seen["kw"]["max_threads"] == statbtrfs.MAX_PARALLEL_COMMANDS
+
+
+def test_has_terminal_is_whether_dev_tty_opens_not_whether_stdin_is_one(monkeypatch):
+    real_open, opened, closed = os.open, [], []
+
+    def fake_open(path, flags, *a, **k):
+        if path != "/dev/tty":
+            return real_open(path, flags, *a, **k)
+        opened.append(flags)
+        if outcome == "none":
+            raise OSError(6, "No such device or address")
+        return 99
+
+    monkeypatch.setattr(statbtrfs.os, "open", fake_open)
+    monkeypatch.setattr(statbtrfs.os, "close", lambda fd: closed.append(fd))
+    # stdin is not a terminal, but /dev/tty opens: `statbtrfs </dev/null` in a terminal
+    monkeypatch.setattr(statbtrfs.sys.stdin, "isatty", lambda: False, raising=False)
+    outcome = "tty"
+    assert statbtrfs._has_terminal() is True
+    assert opened == [os.O_RDWR | os.O_NOCTTY] and closed == [99]  # opened as not to make it ours, and closed
+    # stdin is a terminal as far as it can tell, but there is no controlling terminal to open
+    monkeypatch.setattr(statbtrfs.sys.stdin, "isatty", lambda: True, raising=False)
+    outcome = "none"
+    assert statbtrfs._has_terminal() is False
 
 
 def test_btrfs_replies_carry_stderr_after_stdout(monkeypatch):

@@ -340,14 +340,26 @@ def acquire_root(argv):
         os.execv(sudo, [sudo, '--'] + command)
     USE_SUDO = True
 
-def _as_root(command):
-    """command as statbtrfs runs it: behind the per-command fallback, through `sudo -n`, which never asks for a password.
+def _has_terminal():
+    """Whether statbtrfs has a controlling terminal (/dev/tty opens). That is not whether stdin is one:
+    `statbtrfs </dev/null` in a terminal has one, and sudo can reach it."""
+    try:
+        os.close(os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY))
+    except OSError:
+        return False
+    return True
 
-    multiCMD runs each command in a process group of its own, which can't read the terminal: there sudo 1.8.23 to
-    1.9.16 stopped at their prompt, and statbtrfs waited until a Ctrl-C, showing a password typed meanwhile on the
-    screen. Such a command now fails at once ("sudo: a password is required"). The rest run on sudo's record of a
-    password typed before, which acquire_root's `sudo -l` asks for on a terminal."""
-    return ['sudo', '-n'] + command if USE_SUDO else command
+def _as_root(command, own_session=False):
+    """command as statbtrfs runs it: behind the per-command fallback, through sudo, with `-n` where it could stop at
+    sudo's password prompt: a command multiCMD starts in a process group of its own while statbtrfs has a terminal.
+    There sudo 1.8.23 to 1.9.16 stopped and statbtrfs waited until a Ctrl-C, showing a password typed meanwhile; with
+    -n it fails at once ("sudo: a password is required"), and the rest run on the password acquire_root's `sudo -l`
+    asked for. Elsewhere (no terminal, or own_session: a scrub start's session has none) plain sudo can't stop, and
+    `-n` would only refuse, before it tries, a sudo that authenticates without a question (a PAM ssh agent or
+    Kerberos, an askpass helper)."""
+    if not USE_SUDO:
+        return command
+    return ['sudo'] + (['-n'] if not own_session and _has_terminal() else []) + command
 
 # Each reply is the command's stdout, then its stderr: btrfs reports some failures only there (`scrub
 # status` that failed to read the status file part way still exits 0). The parsers skip lines they don't know.
@@ -868,7 +880,7 @@ def run_detached(command):
     `btrfs scrub start` forks the scrub into a background process that keeps our stdout open and
     cancels the scrub on SIGINT. So the output goes to a file (reading a pipe to EOF would wait
     for the whole scrub), and the new session keeps the terminal's Ctrl-C and hangup away from it."""
-    command = _as_root(command)
+    command = _as_root(command, own_session=True)
     with tempfile.TemporaryFile() as output:
         try:
             returncode = subprocess.call(command, stdin=subprocess.DEVNULL, stdout=output,
