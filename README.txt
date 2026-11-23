@@ -36,17 +36,25 @@ read-only, no root); 130 interrupted; 141 the reader of stdout went away (| head
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
 
-Deferred to 0.47: when each btrfs command has to run through sudo, -s starts no scrub while sudo wants a
-password for btrfs. Until then, run statbtrfs as root or let sudo run it, or let sudo run btrfs with NOPASSWD
-(see docs/limitations.md). Also deferred: naming sudo's refusal in the notes of a status that could not be read.
+Deferred to 0.47 (see docs/limitations.md):
+  - When each btrfs command has to run through sudo, -s starts no scrub while sudo wants a password for btrfs.
+    Until then, run statbtrfs as root, let sudo run statbtrfs itself (without a password where there is no
+    terminal), or let sudo run btrfs with NOPASSWD.
+  - With no terminal (cron, ssh, mssh), a sudo that wants a password for btrfs counts each refused command as a
+    failed login, which pam_faillock can lock the account for: give btrfs NOPASSWD there.
+  - The notes for a status that could not be read do not name what sudo refused.
+  - A device stats reply that lacks one device's counters reads as the sum of the others'.
+  - With -s -d, a skipped filesystem that could not be read is reported as having "a problem".
 
 Upgrading to 0.46 from 0.45:
-  - When each btrfs command has to run through sudo (sudo allows btrfs but not statbtrfs, or statbtrfs's input
-    is not the terminal), a command that sudo wants a password for now fails at once instead of hanging: on a
-    terminal the status and cancel commands run through `sudo -n`. statbtrfs then says "Could not fetch
-    complete info for <mount>" or "Could not cancel the scrub on <mount>: sudo: a password is required.".
-    0.45 waited there until a Ctrl-C, newer sudo under a prompt that took no answer and showed a password typed
-    into it.
+  - When each btrfs command has to run through sudo (sudo allows btrfs but not statbtrfs), a command that sudo
+    wants a password for now fails at once instead of hanging: on a terminal the status and cancel commands run
+    through `sudo -n`. statbtrfs then says "Could not fetch complete info for <mount>" or "Could not cancel the
+    scrub on <mount>: sudo: a password is required.". 0.45 waited there until a Ctrl-C, newer sudo under a
+    prompt that took no answer and showed a password typed into it.
+  - sudo is now asked at the start wherever statbtrfs holds the terminal, also when its input is not the
+    terminal (`statbtrfs </dev/null`, a pipe, nohup). 0.45 asked nothing there: a sudo that wanted a password
+    hung at the first command.
   - A `btrfs device stats` that printed no counter (sudo refused that one command, or btrfs failed) no longer
     reads as 0 errors in every column with exit 0: its row says N/A, a note says "Could not read the device
     stats of <mount>.", and the exit code is 2 (1 when a problem is found elsewhere).

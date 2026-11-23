@@ -86,7 +86,8 @@ def test_exec_failure_is_a_failed_start_not_a_crash(monkeypatch):
 @pytest.mark.parametrize("terminal", [True, False], ids=["terminal", "no-terminal"])
 def test_run_detached_prefixes_plain_sudo_in_per_command_mode(monkeypatch, terminal):
     # Its session has no terminal, whether statbtrfs has one or not: sudo can't stop at a prompt there, so no -n,
-    # which would refuse a sudo that authenticates without a question (a PAM ssh agent, Kerberos, an askpass helper).
+    # which would refuse a sudo that authenticates without a question (a PAM ssh agent, Kerberos) or asks an askpass
+    # helper.
     monkeypatch.setattr(statbtrfs, "USE_SUDO", True)
     monkeypatch.setattr(statbtrfs, "_has_terminal", lambda: terminal)
     seen = []

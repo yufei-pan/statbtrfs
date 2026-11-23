@@ -15,14 +15,16 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
 ### -s through the per-command sudo fallback needs btrfs without a password
 - Kind: deferred
 - What the operator sees: statbtrfs runs as a user whose sudo may run btrfs but not statbtrfs, with a password
-  (no NOPASSWD), so each btrfs command runs through sudo. With input from a terminal, status and -w work on the
-  password asked for at the start (while -i is shorter than sudo's timestamp_timeout, and not with
-  timestamp_timeout=0), but `statbtrfs -s` starts no scrub: each start fails with "sudo: a terminal is required
-  to read the password …" (sudo 1.8: "no tty present and no askpass program specified"), and the run ends
-  "Scrubs ended; N could not be started.", exit 2 when nothing else is wrong. With any other input (cron, ssh
-  without -t, a file) nothing is asked at the start, and every command fails at once, "Could not fetch complete
-  info …", exit 2. Running statbtrfs as root, a sudoers rule that lets the user run statbtrfs itself, or btrfs
-  with NOPASSWD, works.
+  (no NOPASSWD), so each btrfs command runs through sudo. Where statbtrfs holds the terminal (in its foreground,
+  whatever its input is), status and -w work on the password asked for at the start (not with
+  timestamp_timeout=0, and -w only while -i is shorter than sudo's timestamp_timeout), but `statbtrfs -s` starts
+  no scrub: each start fails with "sudo: a terminal is required to read the password …" (sudo 1.8: "no tty present
+  and no askpass program specified"), and the run ends "Scrubs ended; N could not be started.", exit 2 when
+  nothing else is wrong. A sudo with an askpass helper set (SUDO_ASKPASS, sudo.conf) asks the helper instead and
+  waits for it, as in 0.45. Where statbtrfs can't ask on a terminal (cron, ssh without -t, a background job whose
+  input is not the terminal) nothing is asked at the start, and every command fails at once, "Could not fetch
+  complete info …", exit 2. Running statbtrfs as root, or NOPASSWD for statbtrfs or for btrfs, works; a password
+  rule for statbtrfs itself works where statbtrfs holds the terminal.
 - Why: run_detached() starts each scrub in a session of its own, so the terminal's Ctrl-C and hangup never reach
   `btrfs scrub start`'s forked process, which cancels the scrub on SIGINT. That session has no terminal, and sudo
   keeps the password it remembers per terminal (timestamp_type=tty, the default), so it finds none there and can't
@@ -37,14 +39,57 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
 ### A sudo that refuses a status command is not named
 - Kind: deferred
 - What the operator sees: each btrfs command runs through sudo (with `-n` on a terminal) and sudo refuses one it
-  has no remembered password for (timestamp_timeout=0, -i longer than sudo's timeout, input not from a terminal),
-  or one that sudoers does not allow: statbtrfs prints "Could not fetch complete info for <mount>. Skipping...",
-  "Could not read the scrub status of <mount>." or "Could not read the device stats of <mount>." and exits 2,
-  without sudo's own words ("a password is required", "Sorry, user … is not allowed to execute …").
+  has no remembered password for (timestamp_timeout=0, -i longer than sudo's timeout, a run statbtrfs could not ask
+  in at the start), or one that sudoers does not allow: statbtrfs prints "Could not fetch complete info for
+  <mount>. Skipping...", "Could not read the scrub status of <mount>." or "Could not read the device stats of
+  <mount>." and exits 2 (1 when a problem is found elsewhere), without sudo's own words ("a password is
+  required", "Sorry, user … is not allowed to execute …").
 - Why: these notes never showed the reply of the command that failed. Before 0.46 the cases on a terminal hung
   instead.
-- Plan: add the reply's last line to each note, as the scrub start and cancel do; that also names a btrfs
-  missing behind sudo (the known limitation above).
+- Plan: add the reply's last line to each note, as the cancel does (the scrub start's failure shows the first
+  line); that also names a btrfs missing behind sudo, which settles the known limitation above (it leaves this
+  file then).
+- Revisit when: 0.47.
+
+### With no terminal, a password sudo counts each refused command as a failed login
+- Kind: deferred
+- What the operator sees: statbtrfs runs with no terminal (cron, `ssh host statbtrfs`, mssh) as a user whose
+  sudo wants a password for btrfs, on a system that counts failed logins with pam_faillock (EL8 authselect
+  with-faillock, EL7 authconfig --enablefaillock, STIG and CIS profiles). Every btrfs command fails ("Could
+  not fetch complete info …", exit 2), and each counts as a failed login: one run locks the account, and the
+  user's right password is refused (sudo, su, password logins) until faillock's unlock_time passes or an
+  admin runs `faillock --reset`. As in 0.45. NOPASSWD for btrfs, or running statbtrfs as root, avoids it.
+- Why: with no terminal statbtrfs runs plain sudo, which can't ask but still runs PAM's authentication, and
+  pam_faillock records its failure. `sudo -n` records nothing, but also refuses a sudo that authenticates
+  with no question (an ssh agent, Kerberos), which works there now.
+- Plan: with no terminal, ask once at the start (acquire_root's `sudo -l` without -n), then `-n` on every
+  later command; measure that the later commands find the record a no-question sudo leaves. If they don't,
+  ask the user between `-n` and this behaviour.
+- Revisit when: 0.47.
+
+### A device stats reply that lacks one device's counters reads as the others' sum
+- Kind: deferred
+- What the operator sees: a filesystem of several devices where `btrfs device stats` fails for one of them
+  (btrfs-progs v6.14 has the message "device stats ioctl failed on <device>" for it, which would reach stderr), or
+  where a device's path holds a space: that device's counters are missing from the row, which shows the sum of
+  the others' (0 when they have no errors), with no note and exit 0. A reply with no counters at all is reported
+  (N/A, "Could not read the device stats of <mount>.", exit 2).
+- Why: the row sums the lines statbtrfs can parse (`[<path>].<name> <count>`; any other shape is skipped), and a
+  reply with none is the only one it takes for unreadable.
+- Plan: first check what btrfs-progs prints and exits with for a device whose query failed (v6.14's message is
+  read from its binary only; EL7's 4.9.1 is not checked) and for a path with a space. Then read a counter by its
+  last two fields, and call the reply unreadable when it holds an error line, or the counters of fewer devices than
+  `btrfs filesystem show` lists.
+- Revisit when: 0.47.
+
+### -s with -d calls a skipped filesystem that could not be read "a problem"
+- Kind: deferred
+- What the operator sees: `statbtrfs -s -d N`, with a filesystem skipped as recently scrubbed whose only failure
+  is a read that failed (its device stats or scrub status): the run ends "<mount>: skipped by -d, but it has a
+  problem: see the table above" and "Scrubs ended; 1 skipped by -d needs attention.", where nothing was found
+  wrong and the filesystem could not be checked. The table, its notes and the exit code (2) say it right.
+- Why: the end lines take every skipped filesystem with a problem or a failure for one with "a problem".
+- Plan: say it "could not be checked" for one with only failures.
 - Revisit when: 0.47.
 
 ### A forced read-only filesystem behind mounts statbtrfs can't open

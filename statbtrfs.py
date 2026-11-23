@@ -369,9 +369,11 @@ def _as_root(command, own_session=False):
     sudo's password prompt: a command multiCMD starts in a process group of its own while statbtrfs has a terminal.
     There sudo 1.8.23 to 1.9.16 stopped and statbtrfs waited until a Ctrl-C, showing a password typed meanwhile; with
     -n it fails at once ("sudo: a password is required"), and the rest run on the password acquire_root's `sudo -l`
-    asked for. Elsewhere (no terminal, or own_session: a scrub start's session has none) plain sudo can't stop, and
-    `-n` would only refuse, before it tries, a sudo that authenticates without a question (a PAM ssh agent or
-    Kerberos, an askpass helper)."""
+    asked for wherever statbtrfs held the terminal (a run it could not ask in has none, and fails there at once).
+    Elsewhere (no terminal, or own_session: a scrub start's session has none) plain sudo can't stop at a terminal
+    prompt: it asks an askpass helper if one is set (and waits for it), else it fails by itself; and `-n` would only
+    refuse, before it tries, a sudo that authenticates without a question (a PAM ssh agent or Kerberos) or asks the
+    helper. Plain sudo has a cost with no terminal: PAM counts each refusal as a failed login (docs/limitations.md)."""
     if not USE_SUDO:
         return command
     return ['sudo'] + (['-n'] if not own_session and _has_terminal() else []) + command
@@ -735,7 +737,7 @@ def parse_scrub_time_to_epoch(scrub_time):
 def check_skipped(skipped):
     """-d skips the scrub of a recently scrubbed filesystem, never the check: a Status (rows, notes, verdicts) of
     those of skipped with a problem or a failure (device errors, errors the last scrub found, forced read-only,
-    an unreadable status), or None. A healthy one stays out of the table, as -d documents."""
+    an unreadable status or device stats), or None. A healthy one stays out of the table, as -d documents."""
     if not skipped:
         return None
     # Each is read again as a one-shot read is (reread_unclear), or a lock collision with another reader would
@@ -807,7 +809,8 @@ Status = namedtuple('Status', 'rows running problems failures notes scrubs')
 def build_status(polled):
     """Status of poll_filesystems() output: table rows, running filesystems, whether problems
     (device errors, scrub errors, missing devices, a filesystem forced read-only) or failures (unreadable
-    filesystems, a scrub status that could not be read, a scrub that did not complete, mountinfo unreadable)
+    filesystems, a scrub status or device stats that could not be read, a scrub that did not complete, mountinfo
+    unreadable)
     were seen, notes to show with the table, and the parsed scrub status per first mountpoint."""
     rows, running, notes = [], [], []
     scrubs = {}
