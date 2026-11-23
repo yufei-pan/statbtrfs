@@ -818,6 +818,11 @@ def build_status(polled):
             continue
         err_dict = parse_device_stats(device_stats)
         scrub_data = parse_scrub_status(scrub_output)
+        if not err_dict:
+            # btrfs prints a counter per device, so a reply with none (sudo refused this command, or btrfs failed)
+            # says nothing about errors: not "0 errors".
+            notes.append(f"{YELLOW}Could not read the device stats of {mounts}.{RESET}")
+            failures = True
         scrubs[fs['mounts'][0]] = scrub_data
         if scrub_data["scrub_status"] == "running":
             running.append(fs)
@@ -834,11 +839,8 @@ def build_status(polled):
             f"{RED}forced read-only{RESET}: {mounts}" if forced is True else mounts,
             format_device_path(device_path, missing),
             fs_used,
-            color_error_count(err_dict.get('write_io_errs', 0)),
-            color_error_count(err_dict.get('read_io_errs', 0)),
-            color_error_count(err_dict.get('flush_io_errs', 0)),
-            color_error_count(err_dict.get('corruption_errs', 0)),
-            color_error_count(err_dict.get('generation_errs', 0)),
+            *[color_error_count(err_dict.get(key, 0)) if err_dict else "N/A" for key in
+              ('write_io_errs', 'read_io_errs', 'flush_io_errs', 'corruption_errs', 'generation_errs')],
             scrub_data["scrub_status"],
             scrub_data["scrub_time"],
             scrub_data["scrub_rate"],
