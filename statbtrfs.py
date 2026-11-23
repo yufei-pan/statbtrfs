@@ -323,8 +323,9 @@ def _is_root():
 def acquire_root(argv):
     """Make the btrfs commands run as root.
 
-    Non-root: if sudo allows re-running this script, re-exec under sudo once (one prompt, one sudo
-    log entry per run instead of one per command). Otherwise, e.g. a sudoers rule that allows only
+    Non-root: if sudo allows re-running this script, re-exec under sudo once (one prompt, two where sudo
+    remembers nothing, timestamp_timeout=0: the check below asks, and so does the re-exec; one sudo log
+    entry per run instead of one per command). Otherwise, e.g. a sudoers rule that allows only
     btrfs, fall back to running each btrfs command through sudo."""
     global USE_SUDO
     if _is_root():
@@ -375,8 +376,9 @@ def _as_root(command, own_session=False):
     """command as statbtrfs runs it: behind the per-command fallback, through sudo, with `-n` where it could stop at
     sudo's password prompt: a command multiCMD starts in a process group of its own while statbtrfs has a terminal.
     There sudo 1.8.23 to 1.9.16 stopped and statbtrfs waited until a Ctrl-C, showing a password typed meanwhile; with
-    -n it fails at once ("sudo: a password is required"), and the rest run on the password acquire_root's `sudo -l`
-    asked for wherever statbtrfs held the terminal (a run it could not ask in has none, and fails there at once).
+    -n it fails at once ("sudo: a password is required"), and the rest run on the password that acquire_root's `sudo -l`
+    asked for, where it could ask (stdin the terminal, or statbtrfs in the terminal's foreground); a run it could not
+    ask in has none, and fails there at once.
     Elsewhere (no terminal, or own_session: a scrub start's session has none) plain sudo can't stop at a terminal
     prompt: it asks an askpass helper if one is set (and waits for it), else it fails by itself; and `-n` would only
     refuse, before it tries, a sudo that authenticates without a question (a PAM ssh agent or Kerberos) or asks the

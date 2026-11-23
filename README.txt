@@ -44,7 +44,8 @@ Deferred to 0.47 (see docs/limitations.md):
     failed login, which pam_faillock can lock the account for: give btrfs NOPASSWD there.
   - The notes for a status that could not be read do not name what sudo refused.
   - A device stats reply that lacks one device's counters reads as the sum of the others'.
-  - With -s -d, a skipped filesystem that could not be read is reported as having "a problem".
+  - With -s -d, a skipped filesystem that could not be read is reported, at the end of a run that scrubs
+    another one, as having "a problem".
 
 Upgrading to 0.46 from 0.45:
   - When each btrfs command has to run through sudo (sudo allows btrfs but not statbtrfs), a command that sudo
@@ -53,11 +54,13 @@ Upgrading to 0.46 from 0.45:
     scrub on <mount>: sudo: a password is required.". 0.45 waited there until a Ctrl-C, newer sudo under a
     prompt that took no answer and showed a password typed into it.
   - sudo is now asked at the start wherever statbtrfs holds the terminal, also when its input is not the
-    terminal (`statbtrfs </dev/null`, a pipe, nohup). 0.45 asked nothing there: a sudo that wanted a password
+    terminal (`statbtrfs </dev/null`, a pipe). 0.45 asked nothing there: a sudo that wanted a password
     hung at the first command.
   - A `btrfs device stats` that printed no counter (sudo refused that one command, or btrfs failed) no longer
     reads as 0 errors in every column with exit 0: its row says N/A, a note says "Could not read the device
     stats of <mount>.", and the exit code is 2 (1 when a problem is found elsewhere).
+  - A run with its input closed (`statbtrfs 0<&-`) no longer ends in an AttributeError traceback: closed input is
+    not a terminal. A Ctrl-C during -s there hit the same error.
   - The embedded multiCMD is now 1.70. It runs whenever the installed multiCMD is older than 1.70, missing, or
     fails to import. Reports and exit codes do not change.
 

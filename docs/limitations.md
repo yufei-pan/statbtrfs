@@ -15,16 +15,17 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
 ### -s through the per-command sudo fallback needs btrfs without a password
 - Kind: deferred
 - What the operator sees: statbtrfs runs as a user whose sudo may run btrfs but not statbtrfs, with a password
-  (no NOPASSWD), so each btrfs command runs through sudo. Where statbtrfs holds the terminal (in its foreground,
-  whatever its input is), status and -w work on the password asked for at the start (not with
-  timestamp_timeout=0, and -w only while -i is shorter than sudo's timestamp_timeout), but `statbtrfs -s` starts
-  no scrub: each start fails with "sudo: a terminal is required to read the password …" (sudo 1.8: "no tty present
-  and no askpass program specified"), and the run ends "Scrubs ended; N could not be started.", exit 2 when
-  nothing else is wrong. A sudo with an askpass helper set (SUDO_ASKPASS, sudo.conf) asks the helper instead and
-  waits for it, as in 0.45. Where statbtrfs can't ask on a terminal (cron, ssh without -t, a background job whose
-  input is not the terminal) nothing is asked at the start, and every command fails at once, "Could not fetch
-  complete info …", exit 2. Running statbtrfs as root, or NOPASSWD for statbtrfs or for btrfs, works; a password
-  rule for statbtrfs itself works where statbtrfs holds the terminal.
+  (no NOPASSWD), so each btrfs command runs through sudo. Where sudo is asked for the password at the start
+  (statbtrfs is in its terminal's foreground, whatever its input is, or its input is the terminal: a background
+  job stops at the prompt until `fg`), status and -w work on it (not with timestamp_timeout=0, and -w only while
+  -i is shorter than sudo's timestamp_timeout), but `statbtrfs -s` starts no scrub: each start fails with "sudo:
+  a terminal is required to read the password …" (sudo 1.8: "no tty present and no askpass program specified"),
+  and the run ends "Scrubs ended; N could not be started.", exit 2 when nothing else is wrong. A sudo with an
+  askpass helper set (SUDO_ASKPASS, sudo.conf) asks the helper instead and waits for it, as in 0.45. Where sudo
+  is not asked at the start (cron, ssh without -t, a background job of an interactive shell whose input is not
+  the terminal) and no askpass helper is set, every command fails at once,
+  "Could not fetch complete info …", exit 2. Running statbtrfs as root, or NOPASSWD for statbtrfs or for btrfs,
+  works; a password rule for statbtrfs itself works where sudo is asked at the start.
 - Why: run_detached() starts each scrub in a session of its own, so the terminal's Ctrl-C and hangup never reach
   `btrfs scrub start`'s forked process, which cancels the scrub on SIGINT. That session has no terminal, and sudo
   keeps the password it remembers per terminal (timestamp_type=tty, the default), so it finds none there and can't
@@ -72,8 +73,9 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
 - What the operator sees: a filesystem of several devices where `btrfs device stats` fails for one of them
   (btrfs-progs v6.14 has the message "device stats ioctl failed on <device>" for it, which would reach stderr), or
   where a device's path holds a space: that device's counters are missing from the row, which shows the sum of
-  the others' (0 when they have no errors), with no note and exit 0. A reply with no counters at all is reported
-  (N/A, "Could not read the device stats of <mount>.", exit 2).
+  the others' (0 when they have no errors), with no note, and an exit code that ignores it (0 when nothing else is
+  wrong). A reply with no counters at all is reported (N/A, "Could not read the device stats of <mount>.", exit 2,
+  or 1 when a problem is found elsewhere).
 - Why: the row sums the lines statbtrfs can parse (`[<path>].<name> <count>`; any other shape is skipped), and a
   reply with none is the only one it takes for unreadable.
 - Plan: first check what btrfs-progs prints and exits with for a device whose query failed (v6.14's message is
@@ -84,10 +86,11 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
 
 ### -s with -d calls a skipped filesystem that could not be read "a problem"
 - Kind: deferred
-- What the operator sees: `statbtrfs -s -d N`, with a filesystem skipped as recently scrubbed whose only failure
-  is a read that failed (its device stats or scrub status): the run ends "<mount>: skipped by -d, but it has a
-  problem: see the table above" and "Scrubs ended; 1 skipped by -d needs attention.", where nothing was found
-  wrong and the filesystem could not be checked. The table, its notes and the exit code (2) say it right.
+- What the operator sees: `statbtrfs -s -d N` that scrubs at least one filesystem, with another skipped as recently
+  scrubbed whose only failure is a read that failed (its device stats or scrub status): the run ends "<mount>:
+  skipped by -d, but it has a problem: see the table above" and "Scrubs ended; 1 skipped by -d needs attention.",
+  where nothing was found wrong and the filesystem could not be checked. The table, its notes and the exit code (2,
+  or 1 when a problem is found elsewhere) say it right. A run that skips every filesystem prints no such lines.
 - Why: the end lines take every skipped filesystem with a problem or a failure for one with "a problem".
 - Plan: say it "could not be checked" for one with only failures.
 - Revisit when: 0.47.
