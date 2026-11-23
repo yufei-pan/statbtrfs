@@ -259,8 +259,8 @@ print = functools.partial(print, flush=True)
 
 EXIT_OK = 0        # healthy
 EXIT_PROBLEMS = 1  # device errors, scrub errors, missing devices, or a filesystem forced read-only after an error
-EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, a scrub status that could not be read,
-                   # a scrub that did not complete, an unreadable /proc/self/mountinfo or a filesystem that could
+EXIT_FAILURE = 2   # could not check: no mounts, unreadable filesystem, a scrub status or device stats that could not
+                   # be read, a scrub that did not complete, an unreadable /proc/self/mountinfo or a filesystem that could
                    # not be asked whether it was forced read-only, no root
 EXIT_INTERRUPTED = 130  # Ctrl-C
 EXIT_PIPE_CLOSED = 141  # the reader went away (`statbtrfs | head`): 128 + SIGPIPE, as a shell reports it, and as statblk does
@@ -1145,8 +1145,8 @@ def build_parser():
         description="Check Btrfs filesystem status.",
         epilog="Exit status: 0 healthy; 1 problems found (device errors, scrub errors, missing devices, or a "
                "filesystem forced read-only after an error); "
-               "2 the check failed (no matching mounts, an unreadable filesystem, a scrub status that could not be "
-               "read, a scrub that did not complete, an unreadable /proc/self/mountinfo, or a filesystem that could "
+               "2 the check failed (no matching mounts, an unreadable filesystem, a scrub status or device stats that "
+               "could not be read, a scrub that did not complete, an unreadable /proc/self/mountinfo, or a filesystem that could "
                "not be asked whether it was forced read-only, no root); 130 interrupted; "
                "141 the reader of stdout went away (| head).")
     mode = parser.add_mutually_exclusive_group()

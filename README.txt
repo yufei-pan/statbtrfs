@@ -29,9 +29,9 @@ options:
 
 Exit status: 0 healthy; 1 problems found (device errors, scrub errors, missing devices, or a
 filesystem forced read-only after an error); 2 the check failed (no matching mounts, an unreadable
-filesystem, a scrub status that could not be read, a scrub that did not complete, an unreadable
-/proc/self/mountinfo, or a filesystem that could not be asked whether it was forced read-only, no
-root); 130 interrupted; 141 the reader of stdout went away (| head).
+filesystem, a scrub status or device stats that could not be read, a scrub that did not complete, an
+unreadable /proc/self/mountinfo, or a filesystem that could not be asked whether it was forced
+read-only, no root); 130 interrupted; 141 the reader of stdout went away (| head).
 
 Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
 complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
