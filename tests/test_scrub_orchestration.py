@@ -482,6 +482,17 @@ def test_ctrl_c_without_terminal_leaves_scrubs_running(monkeypatch, capsys):
     assert "btrfs scrub cancel" in out and "btrfs scrub resume" in out
 
 
+def test_ctrl_c_with_no_stdin_leaves_scrubs_running(monkeypatch, capsys):
+    # `statbtrfs -s 0<&-` as root: fd 0 is closed, sys.stdin is None, nobody can answer
+    monkeypatch.setattr(statbtrfs.sys, "stdin", None)
+    monkeypatch.setattr(statbtrfs.sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("must not prompt without a stdin"))
+    fake, code = _interrupted_run(monkeypatch)
+    assert code == statbtrfs.EXIT_INTERRUPTED == 130
+    assert fake.cancelled == []
+    assert "Scrubs keep running in the background" in capsys.readouterr().out
+
+
 def test_ctrl_c_on_terminal_asks_and_cancels_only_our_scrubs(monkeypatch, capsys):
     prompts = _interactive(monkeypatch, "y")
     fake, code = _interrupted_run(monkeypatch)

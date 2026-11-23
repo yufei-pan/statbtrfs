@@ -335,16 +335,22 @@ def acquire_root(argv):
         print(f"{RED}statbtrfs needs root: run it as root or install sudo.{RESET}")
         sys.exit(EXIT_FAILURE)
     command = [sys.executable, os.path.abspath(__file__)] + list(argv)
-    # -l: may the user run this exact command? sudo asks on the terminal, not on stdin: wherever we hold the terminal
-    # (a terminal on stdin, or statbtrfs </dev/null, a pipe, nohup) it may ask; elsewhere never wait for a password.
-    check = [sudo, '-l', '--'] if sys.stdin.isatty() or _in_foreground() else [sudo, '-n', '-l', '--']
+    # -l: may the user run this exact command? sudo asks on the terminal, not on stdin. It may ask where stdin is the
+    # terminal (a background job then stops at the prompt until `fg`, as in 0.45) or statbtrfs is in the terminal's
+    # foreground (`statbtrfs </dev/null`, a pipe, nohup in the foreground); elsewhere (cron, ssh without -t,
+    # `statbtrfs </dev/null &` in an interactive shell) never wait for a password.
+    check = [sudo, '-l', '--'] if _stdin_is_terminal() or _in_foreground() else [sudo, '-n', '-l', '--']
     if subprocess.call(check + command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
         os.execv(sudo, [sudo, '--'] + command)
     USE_SUDO = True
 
+def _stdin_is_terminal():
+    """Whether stdin is a terminal. It is not when fd 0 is closed (`statbtrfs 0<&-`: sys.stdin is None)."""
+    return sys.stdin is not None and sys.stdin.isatty()
+
 def _in_foreground():
     """Whether statbtrfs is in the foreground process group of its controlling terminal: sudo can ask there, and
-    in the background (`statbtrfs &` from a script) it would stop at its prompt."""
+    in a background job of an interactive shell (`statbtrfs </dev/null &`) it would stop at its prompt."""
     try:
         fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
     except OSError:
@@ -1136,7 +1142,7 @@ def scrub_interrupted(started, adopted, running, queue, via):
         print(f"Still running (started elsewhere): {', '.join(elsewhere)}")
     if queue:
         print(f"Never started: {', '.join(fs['mounts'][0] for fs in queue)}")
-    if ours and sys.stdin.isatty() and sys.stdout.isatty():
+    if ours and _stdin_is_terminal() and sys.stdout.isatty():
         noun = "scrub" if len(ours) == 1 else "scrubs"
         try:
             answer = input(f"Cancel {len(ours)} running {noun} started by this run? [y/N] ")

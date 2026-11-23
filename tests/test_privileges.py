@@ -89,11 +89,21 @@ def test_acquire_root_reexecs_when_sudo_allows_it(monkeypatch, non_root):
     (True, True, True),     # statbtrfs in a terminal
     (True, False, True),    # `statbtrfs &` from an interactive shell: stdin is the terminal, sudo stops at its prompt, and
                             # `fg` goes on; `-n -l` would refuse a sudo that authenticates with no question
-    (False, True, True),    # `statbtrfs </dev/null`, a pipe, nohup: sudo asks on the terminal, not on stdin
-    (False, False, False),  # cron, `ssh host statbtrfs`, `statbtrfs </dev/null &`: nobody to ask
+    (False, True, True),    # `statbtrfs </dev/null`, a pipe, nohup in the foreground: sudo asks on the terminal, not on stdin
+    (False, False, False),  # cron, `ssh host statbtrfs`, `statbtrfs </dev/null &` in an interactive shell: nobody to ask
 ], ids=["terminal", "background-with-stdin-terminal", "foreground-stdin-elsewhere", "no-one-to-ask"])
 def test_acquire_root_asks_for_a_password_only_where_someone_can_answer(monkeypatch, non_root, tty, foreground, asks):
     checks = _sudo_list_returns(monkeypatch, 0, tty=tty, foreground=foreground)
+    with pytest.raises(Execv):
+        statbtrfs.acquire_root([])
+    assert checks[0][:3] == (["/usr/bin/sudo", "-l", "--"] if asks else ["/usr/bin/sudo", "-n", "-l"])
+
+
+@pytest.mark.parametrize("foreground,asks", [(True, True), (False, False)], ids=["foreground", "background"])
+def test_acquire_root_with_no_stdin_is_not_a_terminal_input(monkeypatch, non_root, foreground, asks):
+    # `statbtrfs 0<&-`: fd 0 is closed, so Python's sys.stdin is None; it is not a terminal, and the foreground decides
+    checks = _sudo_list_returns(monkeypatch, 0, foreground=foreground)
+    monkeypatch.setattr(statbtrfs.sys, "stdin", None)
     with pytest.raises(Execv):
         statbtrfs.acquire_root([])
     assert checks[0][:3] == (["/usr/bin/sudo", "-l", "--"] if asks else ["/usr/bin/sudo", "-n", "-l"])
