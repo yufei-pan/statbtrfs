@@ -340,10 +340,10 @@ def acquire_root(argv):
         os.execv(sudo, [sudo, '--'] + command)
     USE_SUDO = True
 
-def as_root(command):
+def _as_root(command):
     """command as statbtrfs runs it: behind the per-command fallback, through `sudo -n`, which never asks for a password.
 
-    multiCMD runs each command in a process group of its own, which can't read the terminal: there sudo 1.9.5 and
+    multiCMD runs each command in a process group of its own, which can't read the terminal: there sudo 1.8.23 to
     1.9.16 stopped at their prompt, and statbtrfs waited until a Ctrl-C, showing a password typed meanwhile on the
     screen. Such a command now fails at once ("sudo: a password is required"). The rest run on sudo's record of a
     password typed before, which acquire_root's `sudo -l` asks for on a terminal."""
@@ -352,10 +352,10 @@ def as_root(command):
 # Each reply is the command's stdout, then its stderr: btrfs reports some failures only there (`scrub
 # status` that failed to read the status file part way still exits 0). The parsers skip lines they don't know.
 def execute_command(command):
-    return multiCMD.run_command(as_root(command),quiet=True,with_stdErr=True)
+    return multiCMD.run_command(_as_root(command),quiet=True,with_stdErr=True)
 
 def execute_commands(commands):
-    return multiCMD.run_commands([as_root(command) for command in commands],quiet=True,with_stdErr=True,
+    return multiCMD.run_commands([_as_root(command) for command in commands],quiet=True,with_stdErr=True,
                                  max_threads=MAX_PARALLEL_COMMANDS)
 
 def btrfs_not_found():
@@ -868,7 +868,7 @@ def run_detached(command):
     `btrfs scrub start` forks the scrub into a background process that keeps our stdout open and
     cancels the scrub on SIGINT. So the output goes to a file (reading a pipe to EOF would wait
     for the whole scrub), and the new session keeps the terminal's Ctrl-C and hangup away from it."""
-    command = as_root(command)
+    command = _as_root(command)
     with tempfile.TemporaryFile() as output:
         try:
             returncode = subprocess.call(command, stdin=subprocess.DEVNULL, stdout=output,
@@ -910,7 +910,7 @@ def start_scrub(mount):
 
 def _run_scrub_cancel(mount):
     """(exit code, reply lines) of `btrfs scrub cancel`: the exit code is what execute_command() does not return."""
-    task = multiCMD.run_command(as_root(['btrfs', 'scrub', 'cancel', mount]),quiet=True,return_object=True)
+    task = multiCMD.run_command(_as_root(['btrfs', 'scrub', 'cancel', mount]),quiet=True,return_object=True)
     return task.returncode, task.stdout + task.stderr
 
 def cancel_scrub(mount):
