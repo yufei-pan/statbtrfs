@@ -33,8 +33,13 @@ filesystem, a scrub status or device stats that could not be read, a scrub that 
 unreadable /proc/self/mountinfo, or a filesystem that could not be asked whether it was forced
 read-only, no root); 130 interrupted; 141 the reader of stdout went away (| head).
 
-Known limitation: when each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch
-complete info … Skipping…" rather than "btrfs not found on PATH" (see docs/limitations.md).
+Known limitations (see docs/limitations.md):
+  - When each btrfs command has to run through sudo, a missing btrfs shows as "Could not fetch complete info …
+    Skipping…" rather than "btrfs not found on PATH".
+  - On a terminal, the status and cancel commands run through `sudo -n`, so a sudo that signs in with no question
+    (an ssh agent, Kerberos) and remembers nothing at that moment refuses them: "Could not fetch complete info".
+    Give btrfs NOPASSWD, or set `Defaults noninteractive_auth` (sudo 1.9.10 or later; not where pam_faillock is
+    set, as it then counts each refused password sudo as a failed login).
 
 Deferred to 0.47 (see docs/limitations.md):
   - When each btrfs command has to run through sudo, -s starts no scrub while sudo wants a password for btrfs.

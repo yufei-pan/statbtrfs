@@ -12,6 +12,29 @@ Approved known limitations and deferrals. Reviewers: read this first, and don't 
 - Revisit when: someone hits it.
 - Approved: 2026-10-23, the user chose "Known limitation (Recommended)".
 
+### On a terminal, a sudo that signs in with no question is refused when it remembers nothing
+- Kind: known limitation
+- What the operator sees: statbtrfs run as a user (not root) through the per-command sudo fallback, on a
+  terminal, where sudo authenticates with no question and no NOPASSWD rule (an ssh agent through
+  pam_ssh_agent_auth, Kerberos) and remembers nothing at that moment: the status and cancel commands run as
+  `sudo -n`, which does not try, so they are refused: "Could not fetch complete info for <mount>. Skipping...",
+  exit 2, where 0.45 worked. That happens with sudo set to ask every time (`timestamp_timeout=0`); with -s or -w
+  and -i longer than sudo's timeout (5 minutes by default), from the first poll after the remembered sign-in ran
+  out, and a Ctrl-C cancel then says "Could not cancel the scrub on <mount>: sudo: a password is required."; and
+  in a background job whose input is not the terminal (`nohup statbtrfs -s &`, `statbtrfs </dev/null &`), from
+  the first command, also for a user whose sudo may run everything. Runs with no terminal (cron, ssh, mssh) are
+  not affected. Measured on sudo 1.9.16 and 1.8.23. sudo 1.9.9 (Ubuntu 22.04) runs PAM for `sudo -n`, so such a
+  sudo passes there, and each refusal of a password sudo there counts as a failed login where pam_faillock is on.
+- Why: telling "would ask" from "would not" takes running sudo without `-n`: on a terminal that is 0.45's hang (a
+  stopped sudo, and a password typed into it shown in clear), and with no terminal a failed login that
+  pam_faillock counts. The re-review after 0.46's second fix round looked for a design that removes this (a probe
+  at the start, asking in the background, a retry in a session of its own) and found none.
+- Workarounds: NOPASSWD for btrfs; or `Defaults noninteractive_auth` on sudo 1.9.10 or later (EL7's 1.8.23 and
+  EL8's 1.9.5 lack it), which makes `sudo -n` sign in with no question, but then pam_faillock counts each refusal
+  of a password sudo as a failed login, so it is no workaround where faillock is set.
+- Revisit when: someone hits it.
+- Approved: 2026-11-26, the user's pick "Known limitation, release (Recommended)" (relayed by the chief session).
+
 ### -s through the per-command sudo fallback needs btrfs without a password
 - Kind: deferred
 - What the operator sees: statbtrfs runs as a user whose sudo may run btrfs but not statbtrfs, with a password
