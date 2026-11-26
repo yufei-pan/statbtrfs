@@ -18,6 +18,8 @@ Open work lives here and nowhere else (RULES, "Long work: the progress file"). E
 - **A refused sudo at a poll says "Could not fetch complete info" with no reason** (plan: the reply's last line in the note, as the cancel does). State: not started. From: 0.46's final review (2026-11-23), a deferral, not asked.
 - **Through the per-command fallback, `-s` starts no scrub when sudo wants a password for btrfs** (`run_detached`'s new session has no terminal, so sudo cannot find the password it remembers per terminal; 0.45 failed too, with another message). State: not started. From: 0.46's build (2026-11-23), a deferral, not asked.
 
+- **Check: under `stty tostop`, a background statbtrfs's own `sudo -n` (`acquire_root`'s `sudo -n -l`) may stop its whole process group on its refusal** (found by multiCMD 1.71's fix round, 2026-11-25: there a library program's background `sudo -n -v` that wrote its refusal to the terminal stopped the group for good, on real sudo 1.9.16 and 1.8.23; multiCMD's own commands write to pipes). State: not checked. Plan: run it with a tostop terminal in a background job; if it stops, give that call a stderr that is not the terminal, as multiCMD 1.71 does. From: multiCMD 1.71's round, a deferral, not asked.
+
 ### Standing rows
 - **Deferred work** is in `docs/limitations.md` (entries of kind "deferred"); each names when it is revisited.
 
