@@ -88,6 +88,40 @@ def test_exit_failure_when_the_scrub_status_cannot_be_read(monkeypatch, capsys, 
     assert "Could not read the scrub status of /mnt/a." in capsys.readouterr().out
 
 
+# Replies btrfs device stats gives where it printed no counter: sudo refused the command (a sudoers rule that lists
+# some btrfs subcommands; `sudo -n` with no remembered password), or btrfs failed.
+NO_COUNTERS = [
+    pytest.param([], id="empty"),
+    pytest.param(["sudo: a password is required"], id="password"),
+    pytest.param(["Sorry, user op is not allowed to execute '/usr/bin/btrfs device stats /mnt/a' as root on host."],
+                 id="not-allowed"),
+    pytest.param(["ERROR: cannot open /mnt/a: No such file or directory"], id="btrfs-error"),
+]
+
+
+@pytest.mark.parametrize("stats", NO_COUNTERS)
+def test_exit_failure_when_the_device_stats_cannot_be_read(monkeypatch, capsys, stats):
+    # Not "0 errors": the row says N/A, a note says why it is not green, and the exit code is 2, as for a scrub status
+    # that could not be read.
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), stats, SCRUB_FINISHED_OK)})
+    rows = []
+    monkeypatch.setattr(statbtrfs.multiCMD, "pretty_format_table", lambda r, header=None: rows.extend(r) or "TABLE")
+    monkeypatch.setattr(statbtrfs.sys, "argv", ["statbtrfs"])
+    assert statbtrfs.main() == statbtrfs.EXIT_FAILURE
+    assert "Could not read the device stats of /mnt/a." in capsys.readouterr().out
+    assert [row[3:8] for row in rows] == [["N/A"] * 5]
+
+
+def test_scrub_run_does_not_end_green_over_unreadable_device_stats(monkeypatch, capsys):
+    install_status(monkeypatch, statbtrfs, {"/mnt/a": (make_show(uuid_for(1)), [], SCRUB_FINISHED_OK)})
+    monkeypatch.setattr(statbtrfs.time, "sleep", lambda s: None)
+    monkeypatch.setattr(statbtrfs, "run_detached", lambda cmd: (0, "scrub started"))
+    assert _run(monkeypatch, ["-s", "--scrub_command_lockout", "0", "-i", "1"]) == statbtrfs.EXIT_FAILURE
+    out = capsys.readouterr().out
+    assert "Could not read the device stats of /mnt/a." in out
+    assert "All scrubs finished." not in out
+
+
 # A one-shot read that lands on a collision with another reader, or on the moment a scrub ends, reads again.
 
 @pytest.mark.parametrize("old_progs", [False, True])

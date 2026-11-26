@@ -276,6 +276,16 @@ def test_d_does_not_hide_device_errors(monkeypatch, capsys, argv):
     assert "nothing to do" not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("argv", [["-d", "7"], ["-s", "-d", "7", "--scrub_command_lockout", "0", "-i", "1"],
+                                  ["-w", "-d", "7"]], ids=["plain", "scrub", "watch"])
+def test_d_does_not_hide_unreadable_device_stats(monkeypatch, capsys, argv):
+    _skipped_fs(monkeypatch, [])
+    assert _run(monkeypatch, argv) == statbtrfs.EXIT_FAILURE
+    out = capsys.readouterr().out
+    assert "Could not read the device stats of /mnt/a." in out
+    assert "nothing to do" not in out
+
+
 def test_d_with_a_healthy_skipped_filesystem_still_says_nothing_to_do(monkeypatch, capsys):
     _skipped_fs(monkeypatch, STATS_ZERO)
     assert _run(monkeypatch, ["-d", "7"]) == statbtrfs.EXIT_OK

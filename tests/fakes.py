@@ -283,11 +283,13 @@ SUBVOL_SHOWS = {
 
 
 class CommandMap:
-    """Stub for execute_command / execute_commands (and, as an exit 0 with the same lookup, the scrub cancel)."""
+    """Stub for execute_command / execute_commands, and the scrub cancel: its reply by the same lookup, and its exit
+    code from ``returncodes`` ({command: exit code}, 0 for any other)."""
 
-    def __init__(self, mapping=None, default=None):
+    def __init__(self, mapping=None, default=None, returncodes=None):
         self.mapping = dict(mapping or {})
         self.default = [] if default is None else list(default)
+        self.returncodes = dict(returncodes or {})
         self.calls = []
 
     @staticmethod
@@ -312,7 +314,8 @@ class CommandMap:
         return [self._lookup(c) for c in commands]
 
     def run_scrub_cancel(self, mount):
-        return 0, self.execute_command(["btrfs", "scrub", "cancel", mount])
+        command = ["btrfs", "scrub", "cancel", mount]
+        return self.returncodes.get(self._norm(command), 0), self.execute_command(command)
 
 
 def install_mounts(monkeypatch, module, lines):
